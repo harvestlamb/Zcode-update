@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ZCode 镜像 · 管理后台</title>
+  <link rel="icon" href="/favicon.ico" />
+  <link rel="stylesheet" href="/admin/admin.css?v=12" />
+</head>
+<body>
+  <!-- Login -->
+  <div id="login-view" class="login-wrap">
+    <div class="login-ambient" aria-hidden="true"></div>
+    <form id="login-form" class="login-card">
+      <div class="login-brand">
+        <div class="logo-mark" aria-hidden="true">Z</div>
+        <div class="logo-word">ZCODE</div>
+      </div>
+      <h1 class="login-title">管理后台</h1>
+      <p class="login-sub">配置模型 · 查看用量 · 导入内容</p>
+      <label class="field">
+        <span>用户名</span>
+        <input id="li-user" type="text" autocomplete="username" required />
+      </label>
+      <label class="field">
+        <span>密码</span>
+        <input id="li-pass" type="password" autocomplete="current-password" required />
+      </label>
+      <button type="submit" id="li-btn" class="btn btn-primary btn-block">登录</button>
+      <p id="li-err" class="err" hidden></p>
+    </form>
+  </div>
+
+  <!-- App shell -->
+  <div id="app-view" class="shell" hidden>
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="logo-mark sm" aria-hidden="true">Z</div>
+        <div>
+          <div class="logo-word">ZCODE</div>
+          <div class="logo-tag">镜像管理</div>
+        </div>
+      </div>
+      <nav class="sidebar-nav" aria-label="主导航">
+        <button type="button" class="nav-item active" data-tab="overview" data-title="概览" data-sub="内容索引、模型状态与 Token 用量">概览</button>
+        <button type="button" class="nav-item" data-tab="model" data-title="模型" data-sub="添加多个 OpenAI 兼容接口，并设置启用项">模型</button>
+        <button type="button" class="nav-item" data-tab="logs" data-title="访问记录" data-sub="局域网访客 IP、提问内容与 Token 明细">访问记录</button>
+        <button type="button" class="nav-item" data-tab="import" data-title="内容导入" data-sub="上传 .zdoc 包完成校验、升级与重建索引">内容导入</button>
+        <button type="button" class="nav-item" data-tab="skills" data-title="技能库" data-sub="维护局域网可下载的 Skill 源">技能库</button>
+        <button type="button" class="nav-item" data-tab="account" data-title="账户" data-sub="修改管理员用户名与密码">账户</button>
+      </nav>
+      <div class="sidebar-foot">
+        <a class="sidebar-link" href="/" target="_blank" rel="noopener">打开镜像站点</a>
+        <a class="sidebar-link" href="/skills/" target="_blank" rel="noopener">技能共享库</a>
+        <button type="button" id="logout-btn" class="btn btn-ghost btn-block">退出登录</button>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="page-head">
+        <div>
+          <h1 id="page-title">概览</h1>
+          <p id="page-sub" class="muted">内容索引、模型状态与 Token 用量</p>
+        </div>
+      </header>
+
+      <main class="content">
+        <!-- Overview -->
+        <section id="tab-overview" class="tab-pane active">
+          <div class="cards" id="overview-cards"></div>
+          <div class="grid-2">
+            <section class="surface">
+              <h3>检索索引</h3>
+              <div id="ov-retriever" class="kv"></div>
+            </section>
+            <section class="surface">
+              <div class="surface-head">
+                <h3>当前启用模型</h3>
+                <button type="button" id="ov-test" class="btn btn-primary btn-sm">测试连接</button>
+              </div>
+              <div id="ov-llm" class="kv"></div>
+              <p id="ov-test-result" class="status-line muted"></p>
+            </section>
+          </div>
+          <section class="surface">
+            <div class="surface-head">
+              <div>
+                <h3>Token 用量热力图</h3>
+                <p class="muted tight">近 12 周按日用量；下方为星期 × 小时分布</p>
+              </div>
+              <button type="button" id="ov-heatmap-refresh" class="btn btn-ghost btn-sm">刷新</button>
+            </div>
+            <div id="ov-cal-heatmap" class="heat-cal" aria-label="按日 Token 热力图"></div>
+            <div class="heat-legend">
+              <span class="muted">少</span>
+              <span class="heat-swatch l0"></span>
+              <span class="heat-swatch l1"></span>
+              <span class="heat-swatch l2"></span>
+              <span class="heat-swatch l3"></span>
+              <span class="heat-swatch l4"></span>
+              <span class="muted">多</span>
+              <span id="ov-heat-summary" class="muted heat-summary"></span>
+            </div>
+            <h4 class="heat-sub">星期 × 小时</h4>
+            <div id="ov-hour-heatmap" class="heat-hour" aria-label="星期小时 Token 热力图"></div>
+          </section>
+        </section>
+
+        <!-- Models -->
+        <section id="tab-model" class="tab-pane">
+          <div class="surface-head page-actions">
+            <p class="muted tight">可添加多个接口，问答默认使用「启用中」的模型。</p>
+            <button type="button" class="btn btn-primary" id="model-add">添加模型</button>
+          </div>
+          <div id="model-list" class="model-list"></div>
+          <p id="model-empty" class="empty muted" hidden>还没有模型，点击右上角添加一个。</p>
+
+          <form id="model-form" class="surface model-editor" hidden>
+            <h3 id="model-form-title">添加模型</h3>
+            <input type="hidden" id="m-id" />
+            <label class="field">显示名称
+              <input id="m-label" type="text" placeholder="例如：DeepSeek / 本地 Ollama" />
+            </label>
+            <label class="field">服务地址 (Base URL)
+              <input id="m-base_url" type="text" placeholder="https://api.deepseek.com/v1" required />
+            </label>
+            <label class="field">模型 ID
+              <input id="m-model" type="text" placeholder="deepseek-chat / glm-4-flash / qwen2.5:7b" required />
+            </label>
+            <label class="field">API Key
+              <input id="m-api_key" type="password" placeholder="无鉴权可留空" autocomplete="off" />
+            </label>
+            <div class="actions">
+              <button type="submit" class="btn btn-primary" id="m-save">保存</button>
+              <button type="button" class="btn btn-ghost" id="m-test">测试连接</button>
+              <button type="button" class="btn btn-ghost" id="m-cancel">取消</button>
+              <span id="m-msg" class="status-line muted"></span>
+            </div>
+            <p class="hint">Ollama：<code>http://host.docker.internal:11434/v1</code> · 智谱：<code>https://open.bigmodel.cn/api/paas/v4</code></p>
+          </form>
+        </section>
+
+        <!-- Logs -->
+        <section id="tab-logs" class="tab-pane">
+          <div class="surface-head page-actions">
+            <div class="log-filters">
+              <input id="logs-q" type="text" placeholder="搜索问题 / IP / 回答…" />
+              <input id="logs-ip" type="text" placeholder="按 IP 筛选" />
+              <div class="log-seg-filter" role="group" aria-label="时间范围">
+                <button type="button" class="seg active" data-days="" id="logs-days-all">全部</button>
+                <button type="button" class="seg" data-days="7" id="logs-days-7">近 7 天</button>
+                <button type="button" class="seg" data-days="30" id="logs-days-30">近一个月</button>
+              </div>
+              <div class="log-seg-filter log-ok-filter" role="group" aria-label="状态筛选">
+                <button type="button" class="seg active" data-ok="" id="logs-ok-all">全部</button>
+                <button type="button" class="seg" data-ok="true" id="logs-ok-ok">成功</button>
+                <button type="button" class="seg" data-ok="false" id="logs-ok-fail">失败</button>
+              </div>
+              <button type="button" class="btn btn-primary" id="logs-search">查询</button>
+            </div>
+            <div class="actions">
+              <button type="button" class="btn btn-ghost" id="logs-refresh">刷新</button>
+              <button type="button" class="btn btn-ghost" id="logs-clear">清空记录</button>
+            </div>
+          </div>
+          <div id="logs-stats" class="muted stats-line"></div>
+          <div id="logs-list" class="log-list"></div>
+          <p id="logs-empty" class="empty muted" hidden>暂无提问记录。</p>
+          <div class="log-pager" id="logs-pager" hidden>
+            <button type="button" class="btn btn-ghost btn-sm" id="logs-prev">上一页</button>
+            <span id="logs-page-label" class="muted"></span>
+            <button type="button" class="btn btn-ghost btn-sm" id="logs-next">下一页</button>
+          </div>
+        </section>
+
+        <!-- Import -->
+        <section id="tab-import" class="tab-pane">
+          <div id="dropzone" class="dropzone">
+            <input id="imp-file" type="file" accept=".zdoc" hidden />
+            <div class="dz-badge">.zdoc</div>
+            <p class="dz-title">点击或拖拽文档包到这里导入 / 升级</p>
+            <p class="muted">自动校验 SHA-256、比对版本、备份旧版；失败自动回滚并写入升级记录</p>
+          </div>
+          <div id="imp-progress" class="progress" hidden>
+            <div class="bar"><div id="imp-bar-fill" class="bar-fill"></div></div>
+            <span id="imp-pct" class="muted">0%</span>
+          </div>
+          <div id="imp-result" class="result" hidden></div>
+
+          <section class="surface" style="margin-top:16px">
+            <div class="surface-head">
+              <div>
+                <h3>版本备份</h3>
+                <p id="imp-backup-meta" class="muted tight">检查中…</p>
+              </div>
+              <button type="button" class="btn btn-ghost" id="imp-rollback" disabled>回滚到上一版</button>
+            </div>
+          </section>
+
+          <section class="surface">
+            <div class="surface-head">
+              <h3>升级历史</h3>
+              <button type="button" class="btn btn-ghost btn-sm" id="imp-hist-refresh">刷新</button>
+            </div>
+            <div id="imp-history" class="log-list"></div>
+            <p id="imp-history-empty" class="empty muted" hidden>暂无升级记录。</p>
+          </section>
+        </section>
+
+        <!-- Skills -->
+        <section id="tab-skills" class="tab-pane">
+          <div class="surface-head page-actions">
+            <div>
+              <p class="muted tight">管理员上传后，局域网用户可在 <a href="/skills/" target="_blank" rel="noopener">/skills</a> 浏览下载。</p>
+              <p id="skills-dir-hint" class="hint" hidden></p>
+            </div>
+            <div class="actions">
+              <button type="button" class="btn btn-ghost" id="skills-refresh">刷新</button>
+              <a class="btn btn-ghost" href="/skills/" target="_blank" rel="noopener">打开公开页</a>
+            </div>
+          </div>
+
+          <div id="skills-dropzone" class="dropzone skills-dropzone">
+            <input id="skills-file" type="file" accept=".zip,application/zip" hidden />
+            <div class="dz-badge">.zip</div>
+            <p class="dz-title">点击或拖拽技能 zip 到这里上传</p>
+            <p class="muted">包内需含 <code>SKILL.md</code>（可为 <code>技能名/SKILL.md</code>）</p>
+          </div>
+          <p id="skills-upload-msg" class="status-line muted"></p>
+
+          <section class="surface">
+            <h3>粘贴创建</h3>
+            <form id="skills-form" class="form-stack skills-form">
+              <label class="field">技能名（目录名）
+                <input id="sk-name" type="text" placeholder="code-review-checklist" pattern="[a-z0-9][a-z0-9-]*[a-z0-9]|[a-z0-9]" required />
+              </label>
+              <label class="field">描述
+                <input id="sk-desc" type="text" placeholder="一句话说明何时使用" />
+              </label>
+              <label class="field">作者（可选）
+                <input id="sk-author" type="text" placeholder="你的名字" />
+              </label>
+              <label class="field">SKILL.md 正文
+                <textarea id="sk-body" rows="12" placeholder="# 标题&#10;&#10;使用步骤…" required></textarea>
+              </label>
+              <div class="actions">
+                <button type="submit" class="btn btn-primary">保存技能</button>
+                <span id="sk-msg" class="status-line muted"></span>
+              </div>
+            </form>
+          </section>
+
+          <section class="surface">
+            <div class="surface-head">
+              <h3>已发布技能</h3>
+              <span id="skills-count" class="muted"></span>
+            </div>
+            <div id="skills-list" class="skill-list"></div>
+            <p id="skills-empty" class="empty muted" hidden>还没有技能。上传 zip、粘贴创建，或把目录拷到宿主机 <code>intranet/config/skills/</code>。</p>
+          </section>
+        </section>
+
+        <!-- Account -->
+        <section id="tab-account" class="tab-pane">
+          <form id="pw-form" class="surface form-stack">
+            <label class="field">用户名<input id="pw-user" type="text" /></label>
+            <label class="field">新密码<input id="pw-pass" type="password" required /></label>
+            <div class="actions">
+              <button type="submit" class="btn btn-primary">修改账户</button>
+              <span id="pw-msg" class="status-line muted"></span>
+            </div>
+            <p class="hint">修改后写入持久化配置。</p>
+          </form>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script src="/admin/admin.js?v=12"></script>
+</body>
+</html>

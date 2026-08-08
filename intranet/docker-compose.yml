@@ -1,0 +1,45 @@
+# ZCode intranet mirror — static site + AI assistant.
+#
+# Two services share a single ./data volume:
+#   web (nginx)  — serves the mirrored site/, proxies /api to ai, serves /releases
+#   ai  (FastAPI)— BM25/dense retrieval over content/*.md + OpenAI-compatible LLM
+#
+# Bring-up:
+#   1. cp .env.example .env  && edit LLM_* to point at your local model
+#   2. ./import.sh <package>.zdoc   (extracts site/ content/ releases/ into ./data)
+#   3. docker compose up -d --build
+#   4. open http://<host>:8090
+#
+# After an upgrade: re-run ./import.sh with the new .zdoc, then:
+#   docker compose restart ai   (rebuilds the retrieval index)
+services:
+  web:
+    build: ./web
+    container_name: zcode-mirror-web
+    ports:
+      - "${WEB_PORT:-8090}:80"
+    volumes:
+      - ./data:/data:ro
+    depends_on:
+      - ai
+    restart: unless-stopped
+
+  ai:
+    build: ./ai
+    container_name: zcode-mirror-ai
+    env_file:
+      - .env
+    environment:
+      # Admin UI persists settings here (independent of /data, survives imports).
+      - CONFIG_DIR=/config
+      - BACKUP_DIR=/backup
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/data         # rw now: the admin import UI swaps content here
+      - ./config:/config     # persisted LLM + admin settings (survives upgrades)
+      - ./data.backup:/backup  # previous data version, for rollback
+    # If the LLM runs on the Docker host (e.g. Ollama), add:
+    #   extra_hosts: ["host.docker.internal:host-gateway"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

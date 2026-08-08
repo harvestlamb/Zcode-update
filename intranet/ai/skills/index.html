@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ZCode · 社区 Skills</title>
+  <meta name="description" content="局域网内共享的 ZCode Skill 源。浏览、预览并下载 zip，解压到本机即可启用。" />
+  <link rel="icon" href="/favicon.ico" />
+  <link rel="stylesheet" href="/skills/skills.css?v=2" />
+</head>
+<body>
+  <header class="site-header" id="site-header">
+    <nav class="nav-bar" aria-label="主导航">
+      <a class="brand" href="/">
+        <span class="mark" aria-hidden="true">Z</span>
+        <span class="word">ZCODE</span>
+      </a>
+      <div class="nav-links">
+        <a href="/docs/">文档</a>
+        <a href="/changelog/">更新日志</a>
+        <a href="/skills/" class="is-active" aria-current="page">社区</a>
+        <a class="nav-cta" href="/admin/">登录</a>
+      </div>
+      <button type="button" class="nav-toggle" id="nav-toggle" aria-label="打开菜单" aria-expanded="false" aria-controls="mobile-nav">
+        <span></span><span></span>
+      </button>
+    </nav>
+    <div class="mobile-nav" id="mobile-nav" hidden>
+      <a href="/docs/">文档</a>
+      <a href="/changelog/">更新日志</a>
+      <a href="/skills/" aria-current="page">社区</a>
+      <a href="/admin/">登录</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="hero-title">
+      <p class="hero-brand">ZCODE</p>
+      <h1 id="hero-title">社区 · Skills</h1>
+      <p class="hero-lead">局域网内共享的 Skill 源。下载 zip，解压到本机即可在 ZCode 中启用。</p>
+      <div class="hero-actions">
+        <label class="hero-search">
+          <span class="sr-only">搜索技能</span>
+          <input id="q" type="search" placeholder="搜索名称、描述或作者…" autocomplete="off" />
+        </label>
+        <a class="btn btn-primary" href="#library">浏览技能</a>
+      </div>
+    </section>
+
+    <section class="library" id="library" aria-labelledby="library-title">
+      <div class="section-head">
+        <div>
+          <h2 id="library-title">技能库</h2>
+          <p class="muted">管理员在后台上传后，此处即可下载。</p>
+        </div>
+        <div class="toolbar">
+          <span id="count" class="muted count"></span>
+          <button type="button" id="refresh" class="btn btn-ghost">刷新</button>
+        </div>
+      </div>
+      <div id="list" class="skill-grid"></div>
+      <p id="empty" class="empty muted" hidden></p>
+      <p id="err" class="err" hidden></p>
+    </section>
+
+    <section class="install" id="install" aria-labelledby="install-title">
+      <h2 id="install-title">如何安装</h2>
+      <p class="muted install-lead">三步把共享 Skill 装到本机 ZCode。</p>
+      <ol class="steps">
+        <li>
+          <span class="step-num">1</span>
+          <div>
+            <h3>下载 zip</h3>
+            <p>在上方技能卡点击「下载 zip」，得到以技能名命名的压缩包。</p>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">2</span>
+          <div>
+            <h3>解压到技能目录</h3>
+            <p>解压后目录应为 <code>~/.zcode/skills/&lt;name&gt;/SKILL.md</code>。</p>
+            <pre class="cmd">unzip foo.zip -d ~/.zcode/skills/</pre>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">3</span>
+          <div>
+            <h3>在 ZCode 中启用</h3>
+            <p>打开「设置 → 技能」，点击刷新，打开开关后即可用 <code>$技能名</code> 调用。</p>
+          </div>
+        </li>
+      </ol>
+    </section>
+  </main>
+
+  <footer class="site-foot">
+    <a href="/">返回镜像主页</a>
+    <a href="/admin/">管理后台 · 上传技能</a>
+    <a href="/docs/skill/">Skill 文档</a>
+  </footer>
+
+  <script src="/skills/skills.js?v=2"></script>
+</body>
+</html>

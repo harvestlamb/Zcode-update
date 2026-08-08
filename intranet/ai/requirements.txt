@@ -1,0 +1,8 @@
+# Intranet AI service dependencies.
+# Kept minimal: FastAPI + uvicorn + multipart (for Form parsing). BM25 retrieval
+# is implemented in-house (no external deps); dense retrieval uses the stdlib
+# urllib to call the embeddings API.
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+python-multipart>=0.0.9

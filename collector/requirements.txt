@@ -1,0 +1,7 @@
+# Collector dependencies (外网采集器).
+# Python 3.9+. Install on the internet-facing machine:
+#   pip install -r requirements.txt
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+markdownify>=0.13.0
