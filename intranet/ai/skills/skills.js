@@ -27,6 +27,7 @@
     return cache.filter(function (s) {
       return (s.name || "").toLowerCase().indexOf(q) >= 0 ||
         (s.dirname || "").toLowerCase().indexOf(q) >= 0 ||
+        (s.description_zh || "").toLowerCase().indexOf(q) >= 0 ||
         (s.description || "").toLowerCase().indexOf(q) >= 0 ||
         (s.author || "").toLowerCase().indexOf(q) >= 0;
     });
@@ -54,9 +55,10 @@
         '<article class="card" data-name="' + esc(dirname) + '" style="animation-delay:' + (Math.min(i, 8) * 0.04) + 's">' +
           "<div>" +
             "<h3>" + esc(s.name || dirname) + "</h3>" +
-            '<p class="desc">' + esc(s.description || "（无描述）") + "</p>" +
+            '<p class="desc">' + esc(s.description_zh || s.description || "（无描述）") + "</p>" +
           "</div>" +
           '<div class="meta">' +
+            (s.version ? ("v" + esc(s.version) + " · ") : "") +
             (s.author ? ("作者 " + esc(s.author) + " · ") : "") +
             "更新 " + esc(formatTs(s.updated_at)) +
             (s.has_extra_files ? " · 含附件" : "") +

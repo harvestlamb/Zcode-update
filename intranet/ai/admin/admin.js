@@ -3,6 +3,107 @@
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
   var modelsCache = [];
+  var dialogState = null;
+
+  function detailText(exc, fallback) {
+    var d = exc && exc.detail;
+    if (typeof d === "string") return d;
+    if (Array.isArray(d)) {
+      return d.map(function (x) { return (x && (x.msg || x.message)) || String(x); }).join("；");
+    }
+    return fallback || "操作失败";
+  }
+
+  function closeDialog(result) {
+    var root = $("ui-dialog-root");
+    if (!root) return;
+    root.hidden = true;
+    document.body.classList.remove("ui-dialog-open");
+    var resolve = dialogState && dialogState.resolve;
+    dialogState = null;
+    if (resolve) resolve(result);
+  }
+
+  function openDialog(opts) {
+    opts = opts || {};
+    var root = $("ui-dialog-root");
+    var panel = root && root.querySelector(".ui-dialog");
+    var titleEl = $("ui-dialog-title");
+    var bodyEl = $("ui-dialog-body");
+    var okBtn = $("ui-dialog-ok");
+    var cancelBtn = $("ui-dialog-cancel");
+    if (!root || !panel || !titleEl || !bodyEl || !okBtn || !cancelBtn) {
+      return Promise.resolve(opts.mode === "confirm" ? window.confirm(opts.message || "") : true);
+    }
+    if (dialogState && dialogState.resolve) dialogState.resolve(false);
+
+    return new Promise(function (resolve) {
+      dialogState = { resolve: resolve, mode: opts.mode || "alert" };
+      titleEl.textContent = opts.title || (opts.mode === "confirm" ? "请确认" : "提示");
+      bodyEl.textContent = opts.message || "";
+      okBtn.textContent = opts.okText || "确定";
+      cancelBtn.textContent = opts.cancelText || "取消";
+      cancelBtn.hidden = opts.mode !== "confirm";
+
+      panel.className = "ui-dialog";
+      if (opts.tone) panel.classList.add("tone-" + opts.tone);
+      okBtn.className = "btn " + (opts.danger ? "btn-danger solid" : "btn-primary");
+
+      root.hidden = false;
+      document.body.classList.add("ui-dialog-open");
+      setTimeout(function () { okBtn.focus(); }, 0);
+    });
+  }
+
+  function uiAlert(message, opts) {
+    opts = opts || {};
+    return openDialog({
+      mode: "alert",
+      title: opts.title || "提示",
+      message: message,
+      okText: opts.okText || "知道了",
+      tone: opts.tone || "",
+    }).then(function () { return true; });
+  }
+
+  function uiConfirm(message, opts) {
+    opts = opts || {};
+    return openDialog({
+      mode: "confirm",
+      title: opts.title || "请确认",
+      message: message,
+      okText: opts.okText || "确定",
+      cancelText: opts.cancelText || "取消",
+      danger: !!opts.danger,
+      tone: opts.danger ? "danger" : (opts.tone || ""),
+    });
+  }
+
+  function bindDialogChrome() {
+    var root = $("ui-dialog-root");
+    if (!root || root._bound) return;
+    root._bound = true;
+    $("ui-dialog-ok").addEventListener("click", function () {
+      closeDialog(dialogState && dialogState.mode === "confirm" ? true : true);
+    });
+    $("ui-dialog-cancel").addEventListener("click", function () { closeDialog(false); });
+    root.addEventListener("click", function (e) {
+      if (e.target && e.target.getAttribute("data-ui-dialog-dismiss") != null) {
+        closeDialog(dialogState && dialogState.mode === "confirm" ? false : true);
+      }
+    });
+    document.addEventListener("keydown", function (e) {
+      if (!dialogState || ($("ui-dialog-root") && $("ui-dialog-root").hidden)) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeDialog(dialogState.mode === "confirm" ? false : true);
+      } else if (e.key === "Enter" && e.target && e.target.tagName !== "TEXTAREA") {
+        e.preventDefault();
+        closeDialog(true);
+      }
+    });
+  }
+  bindDialogChrome();
 
   // ---- session bootstrap ----
   api("GET", "/api/admin/state").then(function (s) { showApp(); afterLogin(s); })
@@ -83,7 +184,7 @@
           kv("输出 Token", formatNum(al.completion_tokens || 0)) +
           kv("访问 IP 数", al.unique_ips || 0);
       } else {
-        $("ov-llm").innerHTML = "<div class='muted'>尚未配置模型，请到「模型」页添加。</div>";
+        $("ov-llm").innerHTML = "<div class='muted'>当前没有启用的模型。请到「模型」页添加并点击「启用」。</div>";
       }
       if (s.username) $("pw-user").value = s.username;
       loadHeatmap();
@@ -185,14 +286,18 @@
         '<div class="model-row' + (m.active ? " active" : "") + '" data-id="' + esc(m.id) + '">' +
           '<div class="model-meta">' +
             '<div class="name">' + esc(m.label || m.model) +
-              (m.active ? ' <span class="badge">启用中</span>' : "") +
+              (m.active
+                ? ' <span class="badge">启用中</span>'
+                : ' <span class="badge soft">已停用</span>') +
             "</div>" +
             '<div class="sub">' + esc(m.model) + " · " + esc(m.base_url) +
               (m.api_key_set ? " · Key 已设置" : " · 无 Key") +
             "</div>" +
           "</div>" +
           '<div class="model-actions">' +
-            (m.active ? "" : '<button type="button" class="btn btn-ghost btn-sm" data-act="activate">设为启用</button>') +
+            (m.active
+              ? '<button type="button" class="btn btn-ghost btn-sm" data-act="deactivate">停用</button>'
+              : '<button type="button" class="btn btn-primary btn-sm" data-act="activate">启用</button>') +
             '<button type="button" class="btn btn-ghost btn-sm" data-act="test">测试</button>' +
             '<button type="button" class="btn btn-ghost btn-sm" data-act="edit">编辑</button>' +
             '<button type="button" class="btn btn-ghost btn-sm" data-act="del">删除</button>' +
@@ -215,24 +320,47 @@
     if (act === "activate") {
       api("POST", "/api/admin/models/" + encodeURIComponent(id) + "/activate")
         .then(function () { loadModels(); loadOverview(); })
-        .catch(function (exc) { alert((exc && exc.detail) || "切换失败"); });
+        .catch(function (exc) { uiAlert(detailText(exc, "启用失败"), { title: "启用失败", tone: "err" }); });
+    }
+    if (act === "deactivate") {
+      uiConfirm(
+        "停用「" + (m.label || m.model) + "」后，问答将不可用，直到重新启用某个模型。继续？",
+        { title: "停用模型", okText: "停用", danger: true }
+      ).then(function (ok) {
+        if (!ok) return;
+        api("POST", "/api/admin/models/" + encodeURIComponent(id) + "/deactivate")
+          .then(function () { loadModels(); loadOverview(); })
+          .catch(function (exc) { uiAlert(detailText(exc, "停用失败"), { title: "停用失败", tone: "err" }); });
+      });
     }
     if (act === "test") {
       btn.disabled = true;
       api("POST", "/api/admin/models/test", { id: id })
         .then(function (r) {
-          alert(r.ok
-            ? ("连接成功" + (r.models && r.models.length ? "\n可用: " + r.models.slice(0, 8).join(", ") : "") + (r.error ? "\n提示: " + r.error : ""))
-            : ("连接失败: " + (r.error || "未知错误")));
+          if (r.ok) {
+            uiAlert(
+              "连接成功" +
+                (r.models && r.models.length ? "\n可用: " + r.models.slice(0, 8).join(", ") : "") +
+                (r.error ? "\n提示: " + r.error : ""),
+              { title: "测试成功", tone: "ok" }
+            );
+          } else {
+            uiAlert("连接失败: " + (r.error || "未知错误"), { title: "测试失败", tone: "err" });
+          }
         })
-        .catch(function (exc) { alert((exc && exc.detail) || "测试失败"); })
+        .catch(function (exc) { uiAlert(detailText(exc, "测试失败"), { title: "测试失败", tone: "err" }); })
         .finally(function () { btn.disabled = false; });
     }
     if (act === "del") {
-      if (!confirm("确定删除模型「" + (m.label || m.model) + "」？")) return;
-      api("DELETE", "/api/admin/models/" + encodeURIComponent(id))
-        .then(function () { hideEditor(); loadModels(); loadOverview(); })
-        .catch(function (exc) { alert((exc && exc.detail) || "删除失败"); });
+      uiConfirm(
+        "确定删除模型「" + (m.label || m.model) + "」？",
+        { title: "删除模型", okText: "删除", danger: true }
+      ).then(function (ok) {
+        if (!ok) return;
+        api("DELETE", "/api/admin/models/" + encodeURIComponent(id))
+          .then(function () { hideEditor(); loadModels(); loadOverview(); })
+          .catch(function (exc) { uiAlert(detailText(exc, "删除失败"), { title: "删除失败", tone: "err" }); });
+      });
     }
   });
 
@@ -506,10 +634,16 @@
     });
   });
   $("logs-clear").addEventListener("click", function () {
-    if (!confirm("确定清空全部访问 / 提问记录？此操作不可恢复。")) return;
-    api("DELETE", "/api/admin/ask-logs")
-      .then(function () { loadLogs(0); loadOverview(); })
-      .catch(function (exc) { alert((exc && exc.detail) || "清空失败"); });
+    uiConfirm("确定清空全部访问 / 提问记录？此操作不可恢复。", {
+      title: "清空访问记录",
+      okText: "清空",
+      danger: true,
+    }).then(function (ok) {
+      if (!ok) return;
+      api("DELETE", "/api/admin/ask-logs")
+        .then(function () { loadLogs(0); loadOverview(); })
+        .catch(function (exc) { uiAlert(detailText(exc, "清空失败"), { title: "清空失败", tone: "err" }); });
+    });
   });
 
   // ---- import ----
@@ -532,27 +666,33 @@
 
   if ($("imp-rollback")) {
     $("imp-rollback").addEventListener("click", function () {
-      if (!confirm("确定回滚到备份版本？当前内容会被替换。")) return;
-      var btn = $("imp-rollback");
-      btn.disabled = true;
-      api("POST", "/api/admin/rollback")
-        .then(function (body) {
-          var r = $("imp-result");
-          if (r) {
-            r.hidden = false;
-            r.className = "result " + (body.ok ? "ok" : "err");
-            r.innerHTML = "<h4>" + (body.ok ? "已回滚" : "回滚失败") + "</h4>" +
-              "<p class='muted'>" + esc(body.message || "") + "</p>" +
-              (body.from_version ? "<p>版本：<b>" + esc(body.from_version) + "</b> → <b>" + esc(body.to_version || "") + "</b></p>" : "");
-          }
-          loadOverview();
-          loadBackupState();
-          loadUpgradeHistory();
-        })
-        .catch(function (exc) {
-          alert((exc && exc.detail) || "回滚失败");
-        })
-        .finally(function () { loadBackupState(); });
+      uiConfirm("确定回滚到备份版本？当前内容会被替换。", {
+        title: "回滚内容",
+        okText: "回滚",
+        danger: true,
+      }).then(function (ok) {
+        if (!ok) return;
+        var btn = $("imp-rollback");
+        btn.disabled = true;
+        api("POST", "/api/admin/rollback")
+          .then(function (body) {
+            var r = $("imp-result");
+            if (r) {
+              r.hidden = false;
+              r.className = "result " + (body.ok ? "ok" : "err");
+              r.innerHTML = "<h4>" + (body.ok ? "已回滚" : "回滚失败") + "</h4>" +
+                "<p class='muted'>" + esc(body.message || "") + "</p>" +
+                (body.from_version ? "<p>版本：<b>" + esc(body.from_version) + "</b> → <b>" + esc(body.to_version || "") + "</b></p>" : "");
+            }
+            loadOverview();
+            loadBackupState();
+            loadUpgradeHistory();
+          })
+          .catch(function (exc) {
+            uiAlert(detailText(exc, "回滚失败"), { title: "回滚失败", tone: "err" });
+          })
+          .finally(function () { loadBackupState(); });
+      });
     });
   }
 
@@ -682,15 +822,20 @@
           "<div class='skill-row' data-name='" + esc(dirname) + "'>" +
             "<div class='skill-meta'>" +
               "<div class='name'>" + esc(s.name || dirname) +
+                (s.version ? "<span class='badge soft'>v" + esc(s.version) + "</span>" : "") +
                 (s.has_extra_files ? "<span class='badge soft'>含附件</span>" : "") +
               "</div>" +
-              "<div class='sub'>" + esc(s.description || "（无描述）") + "</div>" +
+              "<div class='sub'>" + esc(s.description_zh || s.description || "（无描述）") + "</div>" +
               "<div class='sub'>" +
+                (dirname && dirname !== s.name ? ("目录 " + esc(dirname) + " · ") : "") +
                 (s.author ? ("作者 " + esc(s.author) + " · ") : "") +
                 "更新 " + esc(formatTs(s.updated_at)) +
               "</div>" +
             "</div>" +
             "<div class='skill-actions'>" +
+              "<button type='button' class='btn btn-ghost btn-sm skill-translate'>" +
+                (s.description_zh ? "重译" : "翻译") +
+              "</button>" +
               "<a class='btn btn-ghost btn-sm' href='/api/skills/" + encodeURIComponent(dirname) + "/download'>下载</a>" +
               "<button type='button' class='btn btn-ghost btn-sm skill-del'>删除</button>" +
             "</div>" +
@@ -701,12 +846,59 @@
         btn.addEventListener("click", function () {
           var row = btn.closest(".skill-row");
           var name = row && row.getAttribute("data-name");
-          if (!name || !confirm("确认删除技能「" + name + "」？")) return;
-          api("DELETE", "/api/admin/skills/" + encodeURIComponent(name))
-            .then(loadSkills)
-            .catch(function (exc) {
-              alert((exc && exc.detail) || "删除失败");
-            });
+          if (!name) return;
+          uiConfirm("确认删除技能「" + name + "」？", {
+            title: "删除技能",
+            okText: "删除",
+            danger: true,
+          }).then(function (ok) {
+            if (!ok) return;
+            api("DELETE", "/api/admin/skills/" + encodeURIComponent(name))
+              .then(loadSkills)
+              .catch(function (exc) {
+                uiAlert(detailText(exc, "删除失败"), { title: "删除失败", tone: "err" });
+              });
+          });
+        });
+      });
+      el.querySelectorAll(".skill-translate").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var row = btn.closest(".skill-row");
+          var name = row && row.getAttribute("data-name");
+          if (!name) return;
+          var force = btn.textContent.indexOf("重译") >= 0;
+          var run = function () {
+            btn.disabled = true;
+            var prev = btn.textContent;
+            btn.textContent = "翻译中…";
+            var url = "/api/admin/skills/" + encodeURIComponent(name) + "/translate" +
+              (force ? "?force=true" : "");
+            api("POST", url)
+              .then(function (j) {
+                var zh = (j.skill && j.skill.description_zh) ||
+                  (j.translation && j.translation.description_zh) || "";
+                if ($("skills-batch-msg")) {
+                  $("skills-batch-msg").textContent = zh
+                    ? ("✓ " + name + " · " + zh)
+                    : ("✓ " + name + " 已处理");
+                  $("skills-batch-msg").className = "status-line";
+                }
+                loadSkills();
+              })
+              .catch(function (exc) {
+                uiAlert(detailText(exc, "翻译失败"), { title: "翻译失败", tone: "err" });
+                btn.disabled = false;
+                btn.textContent = prev;
+              });
+          };
+          if (force) {
+            uiConfirm("重新翻译「" + name + "」的中文简介？", {
+              title: "重新翻译",
+              okText: "重译",
+            }).then(function (ok) { if (ok) run(); });
+          } else {
+            run();
+          }
         });
       });
     }).catch(function (exc) {
@@ -718,6 +910,42 @@
 
   if ($("skills-refresh")) {
     $("skills-refresh").addEventListener("click", loadSkills);
+  }
+
+  if ($("skills-translate-missing")) {
+    $("skills-translate-missing").addEventListener("click", function () {
+      var btn = $("skills-translate-missing");
+      var msg = $("skills-batch-msg");
+      uiConfirm("为所有尚未翻译的技能生成中文简介？将调用当前启用的模型。", {
+        title: "批量翻译",
+        okText: "开始翻译",
+      }).then(function (ok) {
+        if (!ok) return;
+        btn.disabled = true;
+        if (msg) {
+          msg.textContent = "批量翻译中…";
+          msg.className = "status-line muted";
+        }
+        api("POST", "/api/admin/skills/translate-missing")
+          .then(function (j) {
+            if (msg) {
+              msg.textContent = "✓ 新译 " + (j.translated || 0) +
+                " · 跳过 " + (j.skipped || 0) +
+                " · 失败 " + (j.failed || 0);
+              msg.className = j.failed ? "status-line err" : "status-line";
+            }
+            loadSkills();
+          })
+          .catch(function (exc) {
+            if (msg) {
+              msg.textContent = "✗ " + detailText(exc, "批量翻译失败");
+              msg.className = "status-line err";
+            }
+            uiAlert(detailText(exc, "批量翻译失败"), { title: "批量翻译失败", tone: "err" });
+          })
+          .finally(function () { btn.disabled = false; });
+      });
+    });
   }
 
   function uploadSkillZip(file) {
@@ -735,8 +963,18 @@
         });
       })
       .then(function (j) {
-        msg.textContent = "✓ 已上传 " + ((j.skill && j.skill.name) || "");
-        msg.className = "status-line";
+        var s = j.skill || {};
+        var t = j.translation || {};
+        var bits = ["✓ 已上传 " + (s.name || s.dirname || "")];
+        if (s.dirname && s.name && s.dirname !== s.name) bits.push("目录 " + s.dirname);
+        if (s.version) bits.push("v" + s.version);
+        if (s.author) bits.push("作者 " + s.author);
+        if (s.description_zh) bits.push(s.description_zh);
+        else if (s.description) bits.push(s.description);
+        if (t.ok === false) bits.push("（中文简介翻译失败：" + (t.error || "未知错误") + "）");
+        else if (t.ok && !t.skipped) bits.push("（已译中文简介）");
+        msg.textContent = bits.join(" · ");
+        msg.className = t.ok === false ? "status-line err" : "status-line";
         loadSkills();
       })
       .catch(function (exc) {
@@ -770,14 +1008,19 @@
       var msg = $("sk-msg");
       msg.textContent = "保存中…"; msg.className = "status-line muted";
       api("POST", "/api/admin/skills", {
-        name: $("sk-name").value.trim(),
-        description: $("sk-desc").value.trim(),
-        author: $("sk-author").value.trim(),
         body: $("sk-body").value,
         overwrite: true,
       }).then(function (j) {
-        msg.textContent = "✓ 已保存 " + ((j.skill && j.skill.name) || "");
-        msg.className = "status-line";
+        var s = j.skill || {};
+        var t = j.translation || {};
+        var bits = ["✓ 已保存 " + (s.name || s.dirname || "")];
+        if (s.dirname && s.name && s.dirname !== s.name) bits.push("目录 " + s.dirname);
+        if (s.author) bits.push("作者 " + s.author);
+        if (s.description_zh) bits.push(s.description_zh);
+        else if (s.description) bits.push(s.description);
+        if (t.ok === false) bits.push("（中文简介翻译失败：" + (t.error || "未知错误") + "）");
+        msg.textContent = bits.join(" · ");
+        msg.className = t.ok === false ? "status-line err" : "status-line";
         $("sk-body").value = "";
         loadSkills();
       }).catch(showErr(msg));

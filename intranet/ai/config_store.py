@@ -99,8 +99,10 @@ def _normalize_store(data: Any) -> dict:
             except ValueError:
                 continue
         active = str(data.get("active_id") or "")
-        if models and active not in {m["id"] for m in models}:
-            active = models[0]["id"]
+        ids = {m["id"] for m in models}
+        # Allow empty active_id (all stopped). Only repair stale ids.
+        if active and active not in ids:
+            active = models[0]["id"] if models else ""
         if not models:
             active = ""
         return {"active_id": active, "models": models}
@@ -171,6 +173,11 @@ def list_models(*, mask_keys: bool = True) -> dict:
 
 
 def get_model(model_id: Optional[str] = None) -> Optional[dict]:
+    """Return a profile by id, or the currently active one.
+
+    When model_id is omitted and nothing is active, returns None (does not
+    fall back to the first profile).
+    """
     store = load_llm_store(persist_migration=True)
     if not store["models"]:
         return None
@@ -179,10 +186,12 @@ def get_model(model_id: Optional[str] = None) -> Optional[dict]:
             if m["id"] == model_id:
                 return dict(m)
         return None
+    if not store["active_id"]:
+        return None
     for m in store["models"]:
         if m["id"] == store["active_id"]:
             return dict(m)
-    return dict(store["models"][0])
+    return None
 
 
 def upsert_model(payload: dict, model_id: Optional[str] = None) -> dict:
@@ -227,10 +236,24 @@ def delete_model(model_id: str) -> dict:
 
 
 def set_active_model(model_id: str) -> dict:
+    """Enable exactly one model (any previous active is replaced)."""
     store = load_llm_store(persist_migration=True)
     if model_id not in {m["id"] for m in store["models"]}:
         raise KeyError("模型不存在")
     store["active_id"] = model_id
+    return save_llm_store(store)
+
+
+def deactivate_model(model_id: Optional[str] = None) -> dict:
+    """Stop the active model. If model_id is given, only clear when it matches."""
+    store = load_llm_store(persist_migration=True)
+    if model_id:
+        if model_id not in {m["id"] for m in store["models"]}:
+            raise KeyError("模型不存在")
+        if store["active_id"] == model_id:
+            store["active_id"] = ""
+    else:
+        store["active_id"] = ""
     return save_llm_store(store)
 
 

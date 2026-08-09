@@ -469,6 +469,91 @@ a.btn {
   justify-content: center;
 }
 
+/* ---- dialogs ---- */
+body.ui-dialog-open { overflow: hidden; }
+.ui-dialog-root {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.ui-dialog-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.ui-dialog {
+  position: relative;
+  width: min(420px, 100%);
+  padding: 28px 26px 22px;
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+  animation: ui-dialog-in .18s ease-out;
+}
+@keyframes ui-dialog-in {
+  from { opacity: 0; transform: translateY(8px) scale(.98); }
+  to { opacity: 1; transform: none; }
+}
+.ui-dialog-mark {
+  width: 36px; height: 36px; border-radius: 11px;
+  display: grid; place-items: center;
+  background: #fff; color: #111;
+  font-weight: 800; font-size: 18px; letter-spacing: -0.04em;
+  margin-bottom: 16px;
+}
+.ui-dialog-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.ui-dialog-body {
+  margin: 10px 0 0;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
+  font-size: 14px;
+}
+.ui-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+.ui-dialog.tone-err .ui-dialog-mark {
+  background: #3a1d21;
+  color: var(--err);
+  border: 1px solid rgba(240, 113, 120, 0.35);
+}
+.ui-dialog.tone-ok .ui-dialog-mark {
+  background: #1a2e22;
+  color: var(--ok);
+  border: 1px solid rgba(93, 206, 142, 0.35);
+}
+.btn-danger {
+  background: #fff;
+  color: #111;
+  font-weight: 600;
+  border-color: transparent;
+  box-shadow: inset 0 0 0 1px rgba(240, 113, 120, 0.55);
+}
+.btn-danger:hover { background: #fff5f5; }
+.ui-dialog.tone-danger .btn-danger,
+.btn-danger.solid {
+  background: #f07178;
+  color: #111;
+  box-shadow: none;
+}
+.ui-dialog.tone-danger .btn-danger:hover { background: #f48a90; }
+
 @media (max-width: 900px) {
   .shell { grid-template-columns: 1fr; }
   .sidebar {

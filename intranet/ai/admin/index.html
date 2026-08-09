@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ZCode 镜像 · 管理后台</title>
   <link rel="icon" href="/favicon.ico" />
-  <link rel="stylesheet" href="/admin/admin.css?v=12" />
+  <link rel="stylesheet" href="/admin/admin.css?v=13" />
 </head>
 <body>
   <!-- Login -->
@@ -109,7 +109,7 @@
         <!-- Models -->
         <section id="tab-model" class="tab-pane">
           <div class="surface-head page-actions">
-            <p class="muted tight">可添加多个接口，问答默认使用「启用中」的模型。</p>
+            <p class="muted tight">可添加多个接口，但同一时间只能<strong>启用 1 个</strong>；启用另一个会自动停用当前项。全部停用后问答不可用。</p>
             <button type="button" class="btn btn-primary" id="model-add">添加模型</button>
           </div>
           <div id="model-list" class="model-list"></div>
@@ -215,6 +215,7 @@
               <p id="skills-dir-hint" class="hint" hidden></p>
             </div>
             <div class="actions">
+              <button type="button" class="btn btn-ghost" id="skills-translate-missing">翻译未译技能</button>
               <button type="button" class="btn btn-ghost" id="skills-refresh">刷新</button>
               <a class="btn btn-ghost" href="/skills/" target="_blank" rel="noopener">打开公开页</a>
             </div>
@@ -224,24 +225,16 @@
             <input id="skills-file" type="file" accept=".zip,application/zip" hidden />
             <div class="dz-badge">.zip</div>
             <p class="dz-title">点击或拖拽技能 zip 到这里上传</p>
-            <p class="muted">包内需含 <code>SKILL.md</code>（可为 <code>技能名/SKILL.md</code>）</p>
+            <p class="muted">自动解析 <code>SKILL.md</code> / <code>_meta.json</code>，并用内置 AI 把简介译成中文（可为 <code>技能名/SKILL.md</code>）</p>
           </div>
           <p id="skills-upload-msg" class="status-line muted"></p>
 
           <section class="surface">
-            <h3>粘贴创建</h3>
+            <h3>粘贴创建（可选）</h3>
+            <p class="muted tight">一般直接上传 zip。粘贴时也只需放整份 <code>SKILL.md</code>，目录名 / 简介 / 作者会从 frontmatter 自动解析。</p>
             <form id="skills-form" class="form-stack skills-form">
-              <label class="field">技能名（目录名）
-                <input id="sk-name" type="text" placeholder="code-review-checklist" pattern="[a-z0-9][a-z0-9-]*[a-z0-9]|[a-z0-9]" required />
-              </label>
-              <label class="field">描述
-                <input id="sk-desc" type="text" placeholder="一句话说明何时使用" />
-              </label>
-              <label class="field">作者（可选）
-                <input id="sk-author" type="text" placeholder="你的名字" />
-              </label>
-              <label class="field">SKILL.md 正文
-                <textarea id="sk-body" rows="12" placeholder="# 标题&#10;&#10;使用步骤…" required></textarea>
+              <label class="field">SKILL.md
+                <textarea id="sk-body" rows="14" placeholder="---&#10;name: my-skill&#10;description: 一句话说明何时使用&#10;author: 可选&#10;---&#10;&#10;# 标题&#10;&#10;使用步骤…" required></textarea>
               </label>
               <div class="actions">
                 <button type="submit" class="btn btn-primary">保存技能</button>
@@ -255,6 +248,7 @@
               <h3>已发布技能</h3>
               <span id="skills-count" class="muted"></span>
             </div>
+            <p id="skills-batch-msg" class="status-line muted"></p>
             <div id="skills-list" class="skill-list"></div>
             <p id="skills-empty" class="empty muted" hidden>还没有技能。上传 zip、粘贴创建，或把目录拷到宿主机 <code>intranet/config/skills/</code>。</p>
           </section>
@@ -276,6 +270,20 @@
     </div>
   </div>
 
-  <script src="/admin/admin.js?v=12"></script>
+  <!-- App dialogs -->
+  <div id="ui-dialog-root" class="ui-dialog-root" hidden>
+    <div class="ui-dialog-backdrop" data-ui-dialog-dismiss></div>
+    <div class="ui-dialog" role="alertdialog" aria-modal="true" aria-labelledby="ui-dialog-title" aria-describedby="ui-dialog-body">
+      <div class="ui-dialog-mark" aria-hidden="true">Z</div>
+      <h2 id="ui-dialog-title" class="ui-dialog-title"></h2>
+      <p id="ui-dialog-body" class="ui-dialog-body"></p>
+      <div class="ui-dialog-actions">
+        <button type="button" class="btn btn-ghost" id="ui-dialog-cancel">取消</button>
+        <button type="button" class="btn btn-primary" id="ui-dialog-ok">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/admin/admin.js?v=13"></script>
 </body>
 </html>

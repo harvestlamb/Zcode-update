@@ -61,6 +61,65 @@ SYSTEM_PROMPT = (
     "4. 不要提及「系统提示」「参考资料」等元信息，自然回答即可。\n"
 )
 
+SKILL_TRANSLATE_SYSTEM = (
+    "你是技术文档译员，负责把 Agent Skill 的英文简介译成简洁中文。"
+    "只输出译好的中文简介本身，不要加标题、引号或前后缀。"
+)
+
+
+def _translate_skill_intro(skill: dict, *, force: bool = False) -> dict:
+    """Translate skill description to a short Chinese intro via the active LLM.
+
+    Soft-fails: upload/create still succeeds if translation is skipped or errors.
+    Returns {"ok": bool, "skipped"?: bool, "error"?: str, "description_zh"?: str}.
+    When force=True, overwrite an existing Chinese intro.
+    """
+    dirname = skill.get("dirname") or skill.get("name") or ""
+    desc = (skill.get("description") or "").strip()
+    existing_zh = (skill.get("description_zh") or "").strip()
+    if existing_zh and not force:
+        return {"ok": True, "skipped": True, "reason": "already_translated", "description_zh": existing_zh}
+    if not desc:
+        return {"ok": True, "skipped": True, "reason": "empty_description"}
+    if skills_store.looks_chinese(desc):
+        # Already Chinese — store as the Chinese intro for consistent UI.
+        try:
+            updated = skills_store.set_description_zh(dirname, desc)
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "already_chinese",
+                "description_zh": updated.get("description_zh") or desc,
+            }
+        except (FileNotFoundError, ValueError, OSError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+    display = skill.get("name") or dirname
+    user = (
+        f"技能名：{display}\n"
+        f"目录名：{dirname}\n\n"
+        f"请将下面的简介译成 1～2 句简洁中文，说明它做什么、适合什么场景。"
+        f"不要添加原文没有的信息。\n\n"
+        f"原文：\n{desc}"
+    )
+    try:
+        result = llm.chat(SKILL_TRANSLATE_SYSTEM, user)
+        zh = (result.get("content") or "").strip().strip("「」\"'")
+        if not zh:
+            return {"ok": False, "error": "模型返回空译文"}
+        # Keep intro short for card UI
+        if len(zh) > 280:
+            zh = zh[:277].rstrip() + "…"
+        updated = skills_store.set_description_zh(dirname, zh)
+        return {
+            "ok": True,
+            "skipped": False,
+            "description_zh": updated.get("description_zh") or zh,
+        }
+    except Exception as exc:  # noqa: BLE001
+        log.warning("skill intro translation failed for %s: %s", dirname, exc)
+        return {"ok": False, "error": str(exc)}
+
 
 def _build_user_prompt(question: str, contexts) -> str:
     refs = "\n\n".join(
@@ -252,7 +311,7 @@ class LoginRequest(BaseModel):
 
 
 class SkillTextCreate(BaseModel):
-    name: str
+    name: str = ""
     description: str = ""
     body: str
     author: str = ""
@@ -421,8 +480,20 @@ def admin_delete_model(model_id: str, _user: str = Depends(admin_auth.require_ad
 
 @app.post("/api/admin/models/{model_id}/activate")
 def admin_activate_model(model_id: str, _user: str = Depends(admin_auth.require_admin)):
+    """Enable this model; any previously enabled model is automatically stopped."""
     try:
         store = config_store.set_active_model(model_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    llm.reload()
+    return {"ok": True, "active_id": store["active_id"]}
+
+
+@app.post("/api/admin/models/{model_id}/deactivate")
+def admin_deactivate_model(model_id: str, _user: str = Depends(admin_auth.require_admin)):
+    """Stop this model if it is currently enabled."""
+    try:
+        store = config_store.deactivate_model(model_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     llm.reload()
@@ -577,7 +648,10 @@ def admin_create_skill_text(body: SkillTextCreate,
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"ok": True, "skill": skill}
+    translation = _translate_skill_intro(skill)
+    if translation.get("ok") and translation.get("description_zh"):
+        skill = skills_store.get_skill(skill["dirname"])
+    return {"ok": True, "skill": skill, "translation": translation}
 
 
 @app.post("/api/admin/skills/upload")
@@ -594,13 +668,87 @@ async def admin_upload_skill(
     await file.close()
     try:
         skill = skills_store.save_skill_from_zip(
-            data, name_override=(name or None), overwrite=overwrite,
+            data,
+            name_override=(name or None),
+            overwrite=overwrite,
+            zip_filename=file.filename,
         )
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"ok": True, "skill": skill}
+    translation = _translate_skill_intro(skill)
+    if translation.get("ok") and translation.get("description_zh"):
+        skill = skills_store.get_skill(skill["dirname"])
+    return {"ok": True, "skill": skill, "translation": translation}
+
+
+@app.post("/api/admin/skills/{name}/translate")
+def admin_translate_skill(
+    name: str,
+    force: bool = False,
+    _user: str = Depends(admin_auth.require_admin),
+):
+    """Translate (or re-translate) one existing skill's intro with the active LLM."""
+    try:
+        skill = skills_store.get_skill(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    translation = _translate_skill_intro(skill, force=force)
+    if translation.get("ok") and translation.get("description_zh"):
+        skill = skills_store.get_skill(skill["dirname"])
+    if not translation.get("ok"):
+        raise HTTPException(
+            status_code=502,
+            detail=translation.get("error") or "翻译失败（请确认已启用可用模型）",
+        )
+    return {"ok": True, "skill": skill, "translation": translation}
+
+
+@app.post("/api/admin/skills/translate-missing")
+def admin_translate_missing_skills(_user: str = Depends(admin_auth.require_admin)):
+    """Batch-translate all skills that still lack a Chinese intro."""
+    items = skills_store.list_skills()
+    results = []
+    translated = 0
+    skipped = 0
+    failed = 0
+    for item in items:
+        if (item.get("description_zh") or "").strip():
+            skipped += 1
+            results.append({
+                "dirname": item.get("dirname"),
+                "ok": True,
+                "skipped": True,
+                "reason": "already_translated",
+            })
+            continue
+        try:
+            skill = skills_store.get_skill(item["dirname"])
+        except (FileNotFoundError, ValueError) as exc:
+            failed += 1
+            results.append({"dirname": item.get("dirname"), "ok": False, "error": str(exc)})
+            continue
+        translation = _translate_skill_intro(skill, force=False)
+        entry = {"dirname": skill.get("dirname"), **translation}
+        results.append(entry)
+        if translation.get("ok") and not translation.get("skipped"):
+            translated += 1
+        elif translation.get("ok"):
+            skipped += 1
+        else:
+            failed += 1
+    return {
+        "ok": failed == 0,
+        "translated": translated,
+        "skipped": skipped,
+        "failed": failed,
+        "results": results,
+        "skills": skills_store.list_skills(),
+    }
 
 
 @app.delete("/api/admin/skills/{name}")

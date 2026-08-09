@@ -68,14 +68,28 @@ class LLMClient:
             self.model_id, self.model, self.base_url,
         )
 
-    def resolve(self, model_id: Optional[str] = None) -> dict:
-        """Resolve a profile for chat/test. Falls back to active, then env."""
+    def resolve(self, model_id: Optional[str] = None, *, require_active: bool = True) -> dict:
+        """Resolve a profile for chat/test.
+
+        When require_active=True (default for /api/ask): only the enabled model
+        may be used; missing active raises KeyError.
+        When require_active=False (admin connection test): any saved profile or
+        env defaults are allowed.
+        """
+        store = config_store.load_llm_store(persist_migration=True)
+        active_id = store.get("active_id") or ""
+
         if model_id:
             m = config_store.get_model(model_id)
             if not m:
                 raise KeyError(f"未知模型: {model_id}")
+            if require_active and m["id"] != active_id:
+                raise KeyError(f"模型未启用: {m.get('label') or model_id}")
         else:
             m = config_store.get_model()
+            if not m and require_active:
+                raise KeyError("当前没有启用的模型，请在管理后台启用一个")
+
         if m:
             return {
                 "id": m["id"],
@@ -94,7 +108,7 @@ class LLMClient:
         }
 
     def public_models(self) -> list:
-        """Profiles safe to expose to the chat widget (no API keys)."""
+        """Only the enabled profile is exposed to the chat widget."""
         store = config_store.list_models(mask_keys=True)
         return [
             {
@@ -104,6 +118,7 @@ class LLMClient:
                 "active": m["active"],
             }
             for m in store["models"]
+            if m.get("active")
         ]
 
     @staticmethod
@@ -206,7 +221,7 @@ class LLMClient:
                     if saved and saved.get("api_key"):
                         cfg["api_key"] = saved["api_key"]
         else:
-            cfg = self.resolve(model_id)
+            cfg = self.resolve(model_id, require_active=False)
 
         result = {
             "ok": False,
