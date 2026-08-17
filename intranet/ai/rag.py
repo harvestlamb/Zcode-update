@@ -229,12 +229,17 @@ class Retriever:
 # ---------------------------------------------------------------------------
 
 def _maybe_build_dense(chunks: List[Chunk]):
-    """Build a dense retriever if EMBEDDINGS_BASE_URL is set; else return None."""
-    base = os.environ.get("EMBEDDINGS_BASE_URL") or os.environ.get("LLM_BASE_URL")
-    model = os.environ.get("EMBEDDINGS_MODEL", "bge-large-zh")
-    api_key = os.environ.get("EMBEDDINGS_API_KEY") or os.environ.get("LLM_API_KEY", "")
+    """Build a dense retriever if EMBEDDINGS_BASE_URL is set; else return None.
+
+    Do **not** fall back to LLM_BASE_URL: chat endpoints are not embeddings
+    servers, and probing them on every import can hang the admin upgrade UI
+    for the full socket timeout after the upload already shows 100%.
+    """
+    base = (os.environ.get("EMBEDDINGS_BASE_URL") or "").strip()
     if not base:
         return None
+    model = os.environ.get("EMBEDDINGS_MODEL", "bge-large-zh")
+    api_key = os.environ.get("EMBEDDINGS_API_KEY") or os.environ.get("LLM_API_KEY", "")
     try:
         return _DenseRetriever(chunks, base, model, api_key)
     except Exception as exc:  # noqa: BLE001
@@ -248,6 +253,9 @@ class _DenseRetriever:
     Stores vectors in memory (the corpus is tiny). Rebuilds from scratch on
     every .rebuild(), which is fine for ~50 docs.
     """
+
+    # Keep import/reindex snappy when the embeddings host is unreachable.
+    _TIMEOUT_SEC = 8
 
     def __init__(self, chunks: List[Chunk], base_url: str, model: str, api_key: str):
         import urllib.request  # local import; only needed for dense mode
@@ -271,7 +279,7 @@ class _DenseRetriever:
                      "Authorization": f"Bearer {self.api_key}"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=self._TIMEOUT_SEC) as resp:
             payload = _json.loads(resp.read().decode("utf-8"))
         return [item["embedding"] for item in payload["data"]]
 

@@ -3,8 +3,12 @@
 Layout:
   /config/skills/<skill-name>/SKILL.md
   /config/skills/<skill-name>/...optional extras...
+  /config/skills/_pending/<submission-id>/   # community submissions awaiting review
+    SKILL.md + extras
+    _submission.json
 
-Public LAN users browse/download; only admin APIs may write.
+Published skills are public (browse/download). Community users may submit;
+only admin APIs can approve/reject or write published skills.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import tempfile
 import time
@@ -25,8 +30,10 @@ log = logging.getLogger("zcode-ai.skills")
 
 CONFIG_DIR = os.environ.get("CONFIG_DIR", "/config")
 SKILLS_DIR = os.path.join(CONFIG_DIR, "skills")
+PENDING_DIR = os.path.join(SKILLS_DIR, "_pending")
 
 NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+SUBMISSION_ID_RE = re.compile(r"^[0-9]{8}-[a-f0-9]{8}$")
 # Strip trailing semver from package folder / zip names: foo-1.2.0, foo-v1.2.0
 _SEMVER_SUFFIX_RE = re.compile(
     r"(?:-|_)v?\d+(?:\.\d+){1,3}(?:[-.]?(?:alpha|beta|rc)\.?\d*)?$",
@@ -36,11 +43,14 @@ MAX_ZIP_BYTES = 8 * 1024 * 1024  # 8 MiB compressed
 MAX_UNCOMPRESSED = 32 * 1024 * 1024  # 32 MiB total extracted
 MAX_FILES = 200
 MAX_SKILL_MD = 512 * 1024  # 512 KiB
+MAX_SUBMITTER_LEN = 64
+MAX_NOTE_LEN = 500
 
 
 def ensure_dir() -> None:
     try:
         os.makedirs(SKILLS_DIR, exist_ok=True)
+        os.makedirs(PENDING_DIR, exist_ok=True)
     except OSError as exc:
         log.warning("Cannot create skills dir %s: %s", SKILLS_DIR, exc)
 
@@ -287,11 +297,12 @@ def _read_skill_md(dir_path: str) -> Tuple[str, Dict[str, str], str]:
 
 
 def _has_extra_files(dir_path: str) -> bool:
+    skip_names = {"SKILL.md", "_submission.json", "_locale.json", "_meta.json", "meta.json"}
     for root, _dirs, files in os.walk(dir_path):
         for f in files:
-            if f == "SKILL.md" and os.path.realpath(root) == os.path.realpath(dir_path):
-                continue
             if f.startswith("."):
+                continue
+            if f in skip_names and os.path.realpath(root) == os.path.realpath(dir_path):
                 continue
             return True
     return False
@@ -634,3 +645,498 @@ def save_skill_from_zip(
                 shutil.rmtree(tmp, ignore_errors=True)
 
     return get_skill(safe)
+
+
+# ---------------------------------------------------------------------------
+# Community submissions (pending admin review)
+# ---------------------------------------------------------------------------
+
+def _new_submission_id() -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    return f"{stamp}-{secrets.token_hex(4)}"
+
+
+def _safe_submission_id(sub_id: str) -> str:
+    sid = (sub_id or "").strip().lower()
+    if not SUBMISSION_ID_RE.match(sid):
+        raise ValueError("无效的投稿 ID")
+    return sid
+
+
+def _pending_path(sub_id: str) -> str:
+    safe = _safe_submission_id(sub_id)
+    path = os.path.realpath(os.path.join(PENDING_DIR, safe))
+    root = os.path.realpath(PENDING_DIR)
+    if path != root and not path.startswith(root + os.sep):
+        raise ValueError("非法路径")
+    return path
+
+
+def _submission_meta_path(dir_path: str) -> str:
+    return os.path.join(dir_path, "_submission.json")
+
+
+def _read_submission_meta(dir_path: str) -> Dict[str, Any]:
+    path = _submission_meta_path(dir_path)
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "rb") as fh:
+            return _read_pkg_meta_bytes(fh.read())
+    except OSError as exc:
+        log.warning("cannot read %s: %s", path, exc)
+        return {}
+
+
+def _write_submission_meta(dir_path: str, meta: Dict[str, Any]) -> None:
+    path = _submission_meta_path(dir_path)
+    payload = json.dumps(meta, ensure_ascii=False, indent=2) + "\n"
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(payload)
+
+
+def _clip_field(value: str, limit: int) -> str:
+    s = (value or "").strip()
+    if len(s) > limit:
+        return s[:limit]
+    return s
+
+
+def _skill_fields_from_dir(dir_path: str) -> Dict[str, Any]:
+    md_path = os.path.join(dir_path, "SKILL.md")
+    if not os.path.isfile(md_path):
+        raise ValueError("投稿中未找到 SKILL.md")
+    _text, meta, _body = _read_skill_md(dir_path)
+    dirname = os.path.basename(dir_path)
+    # Prefer proposed dirname from submission meta when present
+    return _skill_public_fields(
+        dirname,
+        meta,
+        _read_dir_pkg_meta(dir_path),
+        md_path,
+        has_extra=_has_extra_files(dir_path),
+        locale=_read_locale(dir_path),
+    )
+
+
+def _extract_zip_to_dir(
+    data: bytes,
+    dest_dir: str,
+    *,
+    name_override: Optional[str] = None,
+    zip_filename: Optional[str] = None,
+) -> Tuple[str, Dict[str, str]]:
+    """Extract a skill zip into dest_dir. Returns (resolved_dirname, frontmatter)."""
+    if len(data) > MAX_ZIP_BYTES:
+        raise ValueError(f"zip 过大（最大 {MAX_ZIP_BYTES // (1024*1024)}MB）")
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as exc:
+        raise ValueError("无效的 zip 文件") from exc
+
+    with zf:
+        members = _zip_members_safe(zf)
+        prefix, hint = _detect_skill_root(members)
+        md_name = (prefix or "") + "SKILL.md"
+        try:
+            raw_md = zf.read(md_name).decode("utf-8")
+        except KeyError as exc:
+            raise ValueError("zip 中未找到 SKILL.md") from exc
+        except UnicodeError as exc:
+            raise ValueError("SKILL.md 不是合法 UTF-8") from exc
+
+        frontmatter, _body = _parse_frontmatter(raw_md)
+        pkg_meta = _load_zip_pkg_meta(zf, prefix)
+        safe = _resolve_skill_dirname(
+            name_override=name_override,
+            pkg_meta=pkg_meta,
+            frontmatter=frontmatter,
+            dir_hint=hint,
+            zip_filename=zip_filename,
+        )
+
+        os.makedirs(dest_dir, exist_ok=True)
+        for info in members:
+            name = info.filename.replace("\\", "/")
+            if prefix:
+                if not name.startswith(prefix):
+                    continue
+                rel = name[len(prefix):]
+            else:
+                rel = name
+            if not rel or rel.endswith("/"):
+                continue
+            if ".." in rel.split("/"):
+                raise ValueError(f"zip 含非法路径: {name}")
+            target = os.path.realpath(os.path.join(dest_dir, rel))
+            if not target.startswith(os.path.realpath(dest_dir) + os.sep):
+                raise ValueError(f"zip 含非法路径: {name}")
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with zf.open(info) as src, open(target, "wb") as out:
+                shutil.copyfileobj(src, out)
+
+        md_path = os.path.join(dest_dir, "SKILL.md")
+        if not os.path.isfile(md_path):
+            raise ValueError("解压后未找到 SKILL.md")
+
+        meta_out = frontmatter
+        try:
+            text, meta_out, body = _read_skill_md(dest_dir)
+            if not meta_out.get("name") and not meta_out.get("description"):
+                _write_skill_md(dest_dir, safe, "", body or text)
+                _t2, meta_out, _b2 = _read_skill_md(dest_dir)
+            elif not meta_out.get("name"):
+                author = (meta_out.get("author") or "").strip()
+                desc = (meta_out.get("description") or "").strip()
+                lines = ["---", f"name: {safe}", f"description: {desc}"]
+                if author:
+                    lines.append(f"author: {author}")
+                lines.append("---")
+                _write_raw(dest_dir, "\n".join(lines) + "\n\n" + (body or "").lstrip())
+                _t2, meta_out, _b2 = _read_skill_md(dest_dir)
+        except (OSError, ValueError, UnicodeError):
+            meta_out = frontmatter
+
+    return safe, meta_out
+
+
+def _submission_public(meta: Dict[str, Any], skill_fields: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": meta.get("id") or "",
+        "status": meta.get("status") or "pending",
+        "submitted_at": meta.get("submitted_at") or "",
+        "client_ip": meta.get("client_ip") or "",
+        "submitter": meta.get("submitter") or "",
+        "contact": meta.get("contact") or "",
+        "note": meta.get("note") or "",
+        "proposed_dirname": meta.get("proposed_dirname") or skill_fields.get("dirname") or "",
+        "source": meta.get("source") or "zip",
+        "original_filename": meta.get("original_filename") or "",
+        "reviewed_at": meta.get("reviewed_at"),
+        "reviewed_by": meta.get("reviewed_by"),
+        "reject_reason": meta.get("reject_reason"),
+        "skill": {
+            "name": skill_fields.get("name") or "",
+            "dirname": meta.get("proposed_dirname") or skill_fields.get("dirname") or "",
+            "description": skill_fields.get("description") or "",
+            "description_zh": skill_fields.get("description_zh") or "",
+            "author": skill_fields.get("author") or "",
+            "version": skill_fields.get("version") or "",
+            "has_extra_files": bool(skill_fields.get("has_extra_files")),
+        },
+    }
+
+
+def submit_skill_from_zip(
+    data: bytes,
+    *,
+    client_ip: str = "",
+    name_override: Optional[str] = None,
+    zip_filename: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Store a community zip submission under _pending for admin review."""
+    ensure_dir()
+    sub_id = _new_submission_id()
+    dest = _pending_path(sub_id)
+    tmp = tempfile.mkdtemp(prefix="skill-sub-", dir=PENDING_DIR)
+    try:
+        proposed, _meta = _extract_zip_to_dir(
+            data,
+            tmp,
+            name_override=name_override,
+            zip_filename=zip_filename,
+        )
+        # Avoid collision with an already-pending submission for same dirname
+        # (allow multiples; admin decides). Just record proposed name.
+        sub_meta = {
+            "id": sub_id,
+            "status": "pending",
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
+            "client_ip": _clip_field(client_ip, MAX_SUBMITTER_LEN),
+            "submitter": "",
+            "contact": "",
+            "note": "",
+            "proposed_dirname": proposed,
+            "source": "zip",
+            "original_filename": (zip_filename or "")[:200],
+            "reviewed_at": None,
+            "reviewed_by": None,
+            "reject_reason": None,
+        }
+        _write_submission_meta(tmp, sub_meta)
+        if os.path.isdir(dest):
+            shutil.rmtree(dest)
+        os.replace(tmp, dest)
+        tmp = ""
+    finally:
+        if tmp and os.path.isdir(tmp):
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    return get_submission(sub_id)
+
+
+def submit_skill_from_text(
+    body: str,
+    *,
+    name: str = "",
+    description: str = "",
+    author: str = "",
+    client_ip: str = "",
+) -> Dict[str, Any]:
+    """Store a community text (SKILL.md) submission under _pending."""
+    ensure_dir()
+    content = (body or "").strip()
+    if not content:
+        raise ValueError("SKILL.md 正文不能为空")
+
+    meta: Dict[str, str] = {}
+    rest = content
+    if content.lstrip().startswith("---"):
+        meta, rest = _parse_frontmatter(content)
+
+    if (name or "").strip():
+        safe = _slugify_name(name)
+    elif meta.get("name"):
+        safe = _slugify_name(meta["name"])
+    else:
+        raise ValueError(
+            "无法确定技能目录名：请在 SKILL.md frontmatter 写 name，或另行指定"
+        )
+
+    desc = (description or "").strip() or (meta.get("description") or "").strip()
+    author_val = (
+        (author or "").strip()
+        or (meta.get("author") or meta.get("authors") or "").strip()
+    )
+    display_name = (meta.get("name") or "").strip() or safe
+
+    lines = ["---", f"name: {display_name}", f"description: {desc}"]
+    if author_val:
+        lines.append(f"author: {author_val}")
+    lines.append("---")
+    text = "\n".join(lines) + "\n\n" + rest.lstrip()
+    if not text.endswith("\n"):
+        text += "\n"
+
+    sub_id = _new_submission_id()
+    dest = _pending_path(sub_id)
+    tmp = tempfile.mkdtemp(prefix="skill-sub-", dir=PENDING_DIR)
+    try:
+        _write_raw(tmp, text)
+        sub_meta = {
+            "id": sub_id,
+            "status": "pending",
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
+            "client_ip": _clip_field(client_ip, MAX_SUBMITTER_LEN),
+            "submitter": "",
+            "contact": "",
+            "note": "",
+            "proposed_dirname": safe,
+            "source": "text",
+            "original_filename": "",
+            "reviewed_at": None,
+            "reviewed_by": None,
+            "reject_reason": None,
+        }
+        _write_submission_meta(tmp, sub_meta)
+        if os.path.isdir(dest):
+            shutil.rmtree(dest)
+        os.replace(tmp, dest)
+        tmp = ""
+    finally:
+        if tmp and os.path.isdir(tmp):
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    return get_submission(sub_id)
+
+
+def list_submissions(*, status: Optional[str] = "pending") -> List[Dict[str, Any]]:
+    ensure_dir()
+    items: List[Dict[str, Any]] = []
+    try:
+        names = sorted(os.listdir(PENDING_DIR), reverse=True)
+    except OSError:
+        return []
+    for name in names:
+        if name.startswith(".") or name.startswith("skill-sub-"):
+            continue
+        dir_path = os.path.join(PENDING_DIR, name)
+        if not os.path.isdir(dir_path):
+            continue
+        try:
+            item = get_submission(name)
+        except (OSError, ValueError, FileNotFoundError) as exc:
+            log.warning("skip submission %s: %s", name, exc)
+            continue
+        if status and item.get("status") != status:
+            continue
+        items.append(item)
+    items.sort(key=lambda x: x.get("submitted_at") or "", reverse=True)
+    return items
+
+
+def get_submission(sub_id: str) -> Dict[str, Any]:
+    dir_path = _pending_path(sub_id)
+    if not os.path.isdir(dir_path):
+        raise FileNotFoundError(f"投稿不存在: {sub_id}")
+    meta = _read_submission_meta(dir_path)
+    if not meta.get("id"):
+        meta["id"] = _safe_submission_id(sub_id)
+    try:
+        skill_fields = _skill_fields_from_dir(dir_path)
+        # Override dirname display with proposed
+        if meta.get("proposed_dirname"):
+            skill_fields = dict(skill_fields)
+            skill_fields["dirname"] = meta["proposed_dirname"]
+    except (OSError, ValueError, UnicodeError) as exc:
+        skill_fields = {
+            "name": meta.get("proposed_dirname") or sub_id,
+            "dirname": meta.get("proposed_dirname") or "",
+            "description": f"（无法解析 SKILL.md：{exc}）",
+            "description_zh": "",
+            "author": "",
+            "version": "",
+            "has_extra_files": False,
+        }
+    out = _submission_public(meta, skill_fields)
+    # Attach content for admin preview
+    md_path = os.path.join(dir_path, "SKILL.md")
+    if os.path.isfile(md_path):
+        try:
+            with open(md_path, "r", encoding="utf-8") as fh:
+                out["content"] = fh.read(MAX_SKILL_MD)
+        except OSError:
+            out["content"] = ""
+    else:
+        out["content"] = ""
+    return out
+
+
+def pack_submission_zip(sub_id: str) -> bytes:
+    dir_path = _pending_path(sub_id)
+    if not os.path.isdir(dir_path) or not os.path.isfile(os.path.join(dir_path, "SKILL.md")):
+        raise FileNotFoundError(f"投稿不存在: {sub_id}")
+    meta = _read_submission_meta(dir_path)
+    dirname = meta.get("proposed_dirname") or "skill"
+    try:
+        dirname = _slugify_name(str(dirname))
+    except ValueError:
+        dirname = "skill"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for root, _dirs, files in os.walk(dir_path):
+            for f in files:
+                if f.startswith(".") or f == "_submission.json":
+                    continue
+                full = os.path.join(root, f)
+                rel = os.path.relpath(full, dir_path)
+                arc = os.path.join(dirname, rel).replace("\\", "/")
+                zf.write(full, arcname=arc)
+    return buf.getvalue()
+
+
+def approve_submission(
+    sub_id: str,
+    *,
+    overwrite: bool = False,
+    name_override: Optional[str] = None,
+    reviewed_by: str = "",
+) -> Dict[str, Any]:
+    """Promote a pending submission into the published skills library."""
+    ensure_dir()
+    src = _pending_path(sub_id)
+    if not os.path.isdir(src):
+        raise FileNotFoundError(f"投稿不存在: {sub_id}")
+    meta = _read_submission_meta(src)
+    if meta.get("status") and meta.get("status") != "pending":
+        raise ValueError(f"投稿状态不是待审核（当前：{meta.get('status')}）")
+
+    proposed = (name_override or "").strip() or (meta.get("proposed_dirname") or "")
+    if not proposed:
+        # Fall back to frontmatter
+        try:
+            _t, fm, _b = _read_skill_md(src)
+            proposed = fm.get("name") or ""
+        except (OSError, ValueError, UnicodeError):
+            proposed = ""
+    safe = _slugify_name(proposed)
+    dest = _skill_path(safe)
+    if os.path.exists(dest) and not overwrite:
+        raise FileExistsError(
+            f"技能已存在: {safe}（可通过时勾选覆盖，或指定其他目录名）"
+        )
+
+    # Copy skill files (exclude submission meta) into a temp then replace
+    tmp = tempfile.mkdtemp(prefix="skill-approve-", dir=SKILLS_DIR)
+    try:
+        for root, _dirs, files in os.walk(src):
+            for f in files:
+                if f.startswith(".") or f == "_submission.json":
+                    continue
+                full = os.path.join(root, f)
+                rel = os.path.relpath(full, src)
+                target = os.path.realpath(os.path.join(tmp, rel))
+                if not target.startswith(os.path.realpath(tmp) + os.sep):
+                    raise ValueError(f"非法路径: {rel}")
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                shutil.copy2(full, target)
+        if not os.path.isfile(os.path.join(tmp, "SKILL.md")):
+            raise ValueError("投稿中未找到 SKILL.md")
+        if os.path.isdir(dest):
+            shutil.rmtree(dest)
+        os.replace(tmp, dest)
+        tmp = ""
+    finally:
+        if tmp and os.path.isdir(tmp):
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    # Remove pending directory after successful publish
+    shutil.rmtree(src, ignore_errors=True)
+
+    skill = get_skill(safe)
+    return {
+        "ok": True,
+        "submission_id": sub_id,
+        "reviewed_by": (reviewed_by or "").strip(),
+        "skill": skill,
+    }
+
+
+def reject_submission(
+    sub_id: str,
+    *,
+    reason: str = "",
+    reviewed_by: str = "",
+    delete: bool = True,
+) -> Dict[str, Any]:
+    """Reject a pending submission. By default deletes the pending package."""
+    ensure_dir()
+    src = _pending_path(sub_id)
+    if not os.path.isdir(src):
+        raise FileNotFoundError(f"投稿不存在: {sub_id}")
+    meta = _read_submission_meta(src)
+    if meta.get("status") and meta.get("status") != "pending":
+        raise ValueError(f"投稿状态不是待审核（当前：{meta.get('status')}）")
+
+    meta["status"] = "rejected"
+    meta["reviewed_at"] = datetime.now(timezone.utc).isoformat()
+    meta["reviewed_by"] = (reviewed_by or "").strip()
+    meta["reject_reason"] = _clip_field(reason, MAX_NOTE_LEN)
+    _write_submission_meta(src, meta)
+
+    summary = _submission_public(meta, {
+        "name": meta.get("proposed_dirname") or sub_id,
+        "dirname": meta.get("proposed_dirname") or "",
+        "description": "",
+        "description_zh": "",
+        "author": "",
+        "version": "",
+        "has_extra_files": False,
+    })
+    if delete:
+        shutil.rmtree(src, ignore_errors=True)
+    return {"ok": True, "submission": summary}
+
+
+def count_pending_submissions() -> int:
+    return len(list_submissions(status="pending"))

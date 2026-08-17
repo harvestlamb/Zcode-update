@@ -263,14 +263,73 @@ def reindex():
 
 
 # ===========================================================================
-# Public skill library (read-only)
+# Public skill library
 # ===========================================================================
+
+class SkillSubmitText(BaseModel):
+    body: str
+    name: str = ""
+    description: str = ""
+    author: str = ""
+
 
 @app.get("/api/skills")
 def public_list_skills():
     skills_store.ensure_dir()
     items = skills_store.list_skills()
     return {"skills": items, "count": len(items)}
+
+
+@app.post("/api/skills/submit")
+async def public_submit_skill(
+    request: Request,
+    file: UploadFile = File(...),
+    name: Optional[str] = Form(default=None),
+):
+    """Community zip submission — stored as pending until an admin approves."""
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".zip"):
+        raise HTTPException(status_code=400, detail="请上传 .zip 技能包")
+    data = await file.read()
+    await file.close()
+    client = ask_log.client_meta(request)
+    try:
+        submission = skills_store.submit_skill_from_zip(
+            data,
+            client_ip=client.get("ip") or "",
+            name_override=(name or None),
+            zip_filename=file.filename,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    public = {k: v for k, v in submission.items() if k != "content"}
+    return {
+        "ok": True,
+        "message": "已提交，等待管理员审核通过后才会出现在技能库。",
+        "submission": public,
+    }
+
+
+@app.post("/api/skills/submit-text")
+def public_submit_skill_text(request: Request, body: SkillSubmitText):
+    """Community SKILL.md text submission — pending until admin approves."""
+    client = ask_log.client_meta(request)
+    try:
+        submission = skills_store.submit_skill_from_text(
+            body.body,
+            name=body.name,
+            description=body.description,
+            author=body.author,
+            client_ip=client.get("ip") or "",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    public = {k: v for k, v in submission.items() if k != "content"}
+    return {
+        "ok": True,
+        "message": "已提交，等待管理员审核通过后才会出现在技能库。",
+        "submission": public,
+    }
 
 
 @app.get("/api/skills/{name}")
@@ -316,6 +375,16 @@ class SkillTextCreate(BaseModel):
     body: str
     author: str = ""
     overwrite: bool = True
+
+
+class SkillApproveRequest(BaseModel):
+    overwrite: bool = False
+    name: str = ""
+
+
+class SkillRejectRequest(BaseModel):
+    reason: str = ""
+    delete: bool = True
 
 
 class ModelUpsert(BaseModel):
@@ -629,11 +698,108 @@ def admin_password(body: PasswordUpdate, _user: str = Depends(admin_auth.require
 def admin_list_skills(_user: str = Depends(admin_auth.require_admin)):
     skills_store.ensure_dir()
     items = skills_store.list_skills()
+    pending = skills_store.count_pending_submissions()
     return {
         "skills": items,
         "count": len(items),
+        "pending_count": pending,
         "skills_dir": skills_store.SKILLS_DIR,
     }
+
+
+@app.get("/api/admin/skills/pending")
+def admin_list_pending_skills(_user: str = Depends(admin_auth.require_admin)):
+    items = skills_store.list_submissions(status="pending")
+    # Strip heavy content from list view
+    slim = []
+    for item in items:
+        row = {k: v for k, v in item.items() if k != "content"}
+        slim.append(row)
+    return {"submissions": slim, "count": len(slim)}
+
+
+@app.get("/api/admin/skills/pending/{sub_id}")
+def admin_get_pending_skill(sub_id: str, _user: str = Depends(admin_auth.require_admin)):
+    try:
+        return skills_store.get_submission(sub_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/admin/skills/pending/{sub_id}/download")
+def admin_download_pending_skill(sub_id: str, _user: str = Depends(admin_auth.require_admin)):
+    try:
+        data = skills_store.pack_submission_zip(sub_id)
+        sub = skills_store.get_submission(sub_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    dirname = (sub.get("proposed_dirname") or sub_id).strip().lower()
+    return RawResponse(
+        content=data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{dirname}.zip"',
+        },
+    )
+
+
+@app.post("/api/admin/skills/pending/{sub_id}/approve")
+def admin_approve_pending_skill(
+    sub_id: str,
+    body: SkillApproveRequest = SkillApproveRequest(),
+    _user: str = Depends(admin_auth.require_admin),
+):
+    try:
+        result = skills_store.approve_submission(
+            sub_id,
+            overwrite=body.overwrite,
+            name_override=(body.name or None),
+            reviewed_by=_user,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    skill = result.get("skill") or {}
+    translation = _translate_skill_intro(skill)
+    if translation.get("ok") and translation.get("description_zh"):
+        try:
+            skill = skills_store.get_skill(skill["dirname"])
+        except (FileNotFoundError, ValueError, KeyError):
+            pass
+    return {
+        "ok": True,
+        "skill": skill,
+        "translation": translation,
+        "submission_id": sub_id,
+    }
+
+
+@app.post("/api/admin/skills/pending/{sub_id}/reject")
+def admin_reject_pending_skill(
+    sub_id: str,
+    body: SkillRejectRequest = SkillRejectRequest(),
+    _user: str = Depends(admin_auth.require_admin),
+):
+    try:
+        result = skills_store.reject_submission(
+            sub_id,
+            reason=body.reason,
+            reviewed_by=_user,
+            delete=body.delete,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
 
 
 @app.post("/api/admin/skills")

@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ZCode · 社区 Skills</title>
-  <meta name="description" content="局域网内共享的 ZCode Skill 源。浏览、预览并下载 zip，也可投稿等待管理员审核。" />
+  <title>技能索引 · ZCode 社区 Skills</title>
+  <meta name="description" content="按关键字检索已上架的 ZCode Skill：名称、描述、作者、目录名。" />
   <link rel="icon" href="/favicon.ico" />
   <link rel="stylesheet" href="/skills/skills.css?v=6" />
 </head>
-<body>
+<body class="page-catalog">
   <header class="site-header" id="site-header">
     <nav class="nav-bar" aria-label="主导航">
       <a class="brand" href="/">
@@ -35,73 +35,51 @@
   </header>
 
   <main>
-    <section class="hero" aria-labelledby="hero-title">
-      <p class="hero-brand">ZCODE</p>
-      <h1 id="hero-title">社区 · Skills</h1>
-      <p class="hero-lead">局域网内任何人都可以投稿 Skill；管理员审核通过后才会上架供大家下载。</p>
-      <form class="hero-actions" id="hero-search-form" action="/skills/catalog.html" method="get" role="search">
-        <label class="hero-search">
-          <span class="sr-only">搜索技能</span>
-          <input id="q" name="q" type="search" placeholder="关键字检索名称、描述、作者…" autocomplete="off" />
+    <section class="catalog-hero" aria-labelledby="catalog-title">
+      <div class="catalog-hero-copy">
+        <p class="catalog-kicker">ZCODE · COMMUNITY</p>
+        <h1 id="catalog-title">技能索引</h1>
+        <p class="catalog-lead">检索全部已上架 Skill。支持多关键字（空格分隔，同时匹配名称、目录、中英文描述与作者）。</p>
+      </div>
+      <form class="catalog-search" id="catalog-form" role="search">
+        <label class="catalog-search-field">
+          <span class="sr-only">关键字</span>
+          <input id="q" name="q" type="search" placeholder="例如：review 发布 作者名…" autocomplete="off" autofocus />
         </label>
-        <button type="submit" class="btn btn-ghost">搜索索引</button>
-        <button type="button" class="btn btn-primary js-open-submit">投稿技能</button>
+        <div class="catalog-controls">
+          <label class="catalog-select">
+            <span class="sr-only">排序</span>
+            <select id="sort" aria-label="排序方式">
+              <option value="updated">最近更新</option>
+              <option value="name">名称 A–Z</option>
+              <option value="author">作者</option>
+            </select>
+          </label>
+          <label class="catalog-check">
+            <input type="checkbox" id="extra-only" />
+            <span>仅含附件</span>
+          </label>
+          <button type="button" id="clear" class="btn btn-ghost btn-sm">清空</button>
+          <button type="button" id="refresh" class="btn btn-ghost btn-sm">刷新</button>
+        </div>
       </form>
+      <div class="catalog-stats" aria-live="polite">
+        <span id="count" class="muted"></span>
+        <div id="letter-bar" class="letter-bar" hidden></div>
+      </div>
     </section>
 
-    <section class="library" id="library" aria-labelledby="library-title">
-      <div class="section-head">
-        <div>
-          <h2 id="library-title">精选上架</h2>
-          <p class="muted">首页仅展示最近更新的少量技能，完整目录请用技能索引检索。</p>
-        </div>
-        <div class="toolbar">
-          <span id="count" class="muted count"></span>
-          <button type="button" id="refresh" class="btn btn-ghost">刷新</button>
-          <a class="btn btn-ghost" href="/skills/catalog.html" title="查看全部已上架技能">更多</a>
-        </div>
-      </div>
-      <div id="list" class="skill-grid"></div>
-      <p id="home-more" class="home-more muted" hidden></p>
+    <section class="library catalog-library" aria-label="检索结果">
+      <div id="list" class="catalog-results"></div>
       <p id="empty" class="empty muted" hidden></p>
       <p id="err" class="err" hidden></p>
-    </section>
-
-    <section class="install" id="install" aria-labelledby="install-title">
-      <h2 id="install-title">如何安装</h2>
-      <p class="muted install-lead">三步把共享 Skill 装到本机 ZCode。</p>
-      <ol class="steps">
-        <li>
-          <span class="step-num">1</span>
-          <div>
-            <h3>下载 zip</h3>
-            <p>在技能卡或索引页点击「下载 zip」，得到以技能名命名的压缩包。</p>
-          </div>
-        </li>
-        <li>
-          <span class="step-num">2</span>
-          <div>
-            <h3>解压到技能目录</h3>
-            <p>解压后目录应为 <code>~/.zcode/skills/&lt;name&gt;/SKILL.md</code>。</p>
-            <pre class="cmd">unzip foo.zip -d ~/.zcode/skills/</pre>
-          </div>
-        </li>
-        <li>
-          <span class="step-num">3</span>
-          <div>
-            <h3>在 ZCode 中启用</h3>
-            <p>打开「设置 → 技能」，点击刷新，打开开关后即可用 <code>$技能名</code> 调用。</p>
-          </div>
-        </li>
-      </ol>
     </section>
   </main>
 
   <footer class="site-foot">
-    <a href="/">返回镜像主页</a>
-    <a href="/skills/catalog.html">技能索引</a>
+    <a href="/skills/">返回社区首页</a>
     <button type="button" class="foot-btn js-open-submit">投稿技能</button>
-    <a href="/admin/">管理后台 · 审核投稿</a>
+    <a href="/admin/">管理后台</a>
     <a href="/docs/skill/">Skill 文档</a>
   </footer>
 
@@ -129,6 +107,6 @@
   </div>
 
   <script src="/skills/skills-common.js?v=6"></script>
-  <script src="/skills/skills.js?v=6"></script>
+  <script src="/skills/catalog.js?v=6"></script>
 </body>
 </html>

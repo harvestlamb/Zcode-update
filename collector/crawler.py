@@ -177,6 +177,7 @@ def crawl_all(build_root: str) -> dict:
 
     # --- 1. Crawl HTML pages, rewrite, collect asset URLs ---
     total = len(config.CONTENT_ROUTES)
+    failed_routes: List[str] = []
     log.info("Crawling %d content routes from %s ...", total, config.SITE_BASE)
     for i, route in enumerate(config.CONTENT_ROUTES, 1):
         url = config.SITE_BASE + route
@@ -185,6 +186,7 @@ def crawl_all(build_root: str) -> dict:
             html = fetch_text(url)
         except Exception as exc:  # noqa: BLE001
             log.error("  ! failed to fetch %s: %s", route, exc)
+            failed_routes.append(route)
             continue
 
         new_html, page_assets = rewrite_html(html, url)
@@ -194,6 +196,22 @@ def crawl_all(build_root: str) -> dict:
         disk = _write_html(build_root, site_rel_dir, filename, new_html)
         pages_written.append(disk)
         log.debug("  wrote %s", os.path.relpath(disk, build_root))
+
+    if failed_routes:
+        raise RuntimeError(
+            "Crawl incomplete; missing routes (packaging would ship a broken "
+            f"mirror): {', '.join(failed_routes)}"
+        )
+
+    # Changelog landing page is linked as /changelog/index.html everywhere.
+    changelog_index = os.path.join(
+        build_root, config.BUILD_SITE_DIR, "cn", "changelog", "index.html"
+    )
+    if not os.path.isfile(changelog_index):
+        raise RuntimeError(
+            f"Required page missing after crawl: {changelog_index} "
+            "(from /cn/changelog?page=1). Refusing to continue."
+        )
 
     # --- 1b. Materialise redirect targets that the site exposes as nav hubs. ---
     # The live /cn/docs 307-redirects to /cn/docs/welcome. We did not crawl that

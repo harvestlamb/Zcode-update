@@ -138,7 +138,10 @@
       if (t.dataset.tab === "model") loadModels();
       if (t.dataset.tab === "logs") loadLogs(0);
       if (t.dataset.tab === "import") { loadBackupState(); loadUpgradeHistory(); }
-      if (t.dataset.tab === "skills") loadSkills();
+      if (t.dataset.tab === "skills") {
+        loadSkills();
+        loadPendingSkills();
+      }
     });
   });
 
@@ -755,18 +758,31 @@
   function uploadImport(file) {
     $("imp-result").hidden = true;
     var prog = $("imp-progress"), fill = $("imp-bar-fill"), pct = $("imp-pct");
-    prog.hidden = false; fill.style.width = "0%"; pct.textContent = "上传中…";
+    var uploadDone = false;
+    prog.hidden = false; fill.style.width = "0%"; pct.textContent = "上传中 0%…";
     var xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/admin/import");
     xhr.upload.onprogress = function (e) {
-      if (e.lengthComputable) {
-        var p = Math.round(e.loaded / e.total * 100);
-        fill.style.width = p + "%"; pct.textContent = p + "%";
+      if (!e.lengthComputable) return;
+      var p = Math.round(e.loaded / e.total * 100);
+      fill.style.width = Math.min(p, 100) + "%";
+      if (p >= 100) {
+        uploadDone = true;
+        // Upload finished; server still verifies SHA-256, swaps content, rebuilds index.
+        pct.textContent = "上传完成，正在校验并重建索引…";
+      } else {
+        pct.textContent = "上传中 " + p + "%…";
       }
+    };
+    xhr.upload.onload = function () {
+      uploadDone = true;
+      fill.style.width = "100%";
+      pct.textContent = "上传完成，正在校验并重建索引…";
     };
     xhr.onload = function () {
       var body; try { body = JSON.parse(xhr.responseText); } catch (err) { body = {}; }
-      pct.textContent = "处理完成";
+      fill.style.width = "100%";
+      pct.textContent = "全部完成";
       var r = $("imp-result");
       r.hidden = false;
       var ok = xhr.status < 400 && body.ok !== false;
@@ -793,12 +809,191 @@
       $("imp-result").hidden = false;
       $("imp-result").className = "result err";
       $("imp-result").innerHTML = "<h4>网络错误</h4><p>上传失败，请重试。</p>";
+      pct.textContent = "失败";
     };
     var fd = new FormData(); fd.append("file", file);
     xhr.send(fd);
   }
 
   // ---- skills library ----
+  function loadPendingSkills() {
+    var el = $("skills-pending-list");
+    var empty = $("skills-pending-empty");
+    var countBadge = $("skills-pending-count");
+    if (!el) return;
+    api("GET", "/api/admin/skills/pending").then(function (data) {
+      var list = data.submissions || [];
+      if (countBadge) {
+        if (list.length) {
+          countBadge.hidden = false;
+          countBadge.textContent = String(list.length);
+        } else {
+          countBadge.hidden = true;
+        }
+      }
+      if (!list.length) {
+        el.innerHTML = "";
+        if (empty) empty.hidden = false;
+        return;
+      }
+      if (empty) empty.hidden = true;
+      el.innerHTML = list.map(function (sub) {
+        var skill = sub.skill || {};
+        var dirname = sub.proposed_dirname || skill.dirname || "";
+        var title = skill.name || dirname || sub.id;
+        return (
+          "<div class='skill-row pending-row' data-id='" + esc(sub.id) + "' data-dirname='" + esc(dirname) + "'>" +
+            "<div class='skill-meta'>" +
+              "<div class='name'>" + esc(title) +
+                "<span class='badge soft'>待审</span>" +
+                (skill.version ? "<span class='badge soft'>v" + esc(skill.version) + "</span>" : "") +
+                (skill.has_extra_files ? "<span class='badge soft'>含附件</span>" : "") +
+              "</div>" +
+              "<div class='sub'>" + esc(skill.description_zh || skill.description || "（无描述）") + "</div>" +
+              "<div class='sub'>" +
+                (dirname ? ("目录 " + esc(dirname) + " · ") : "") +
+                (sub.client_ip ? ("IP " + esc(sub.client_ip) + " · ") : "") +
+                "提交 " + esc(formatTs(sub.submitted_at)) +
+              "</div>" +
+            "</div>" +
+            "<div class='skill-actions'>" +
+              "<button type='button' class='btn btn-ghost btn-sm skill-pending-preview'>预览</button>" +
+              "<a class='btn btn-ghost btn-sm' href='/api/admin/skills/pending/" + encodeURIComponent(sub.id) + "/download'>下载</a>" +
+              "<button type='button' class='btn btn-primary btn-sm skill-pending-approve'>通过</button>" +
+              "<button type='button' class='btn btn-ghost btn-sm skill-pending-reject'>拒绝</button>" +
+            "</div>" +
+            "<div class='pending-preview' hidden><pre class='pending-preview-body'>加载中…</pre></div>" +
+          "</div>"
+        );
+      }).join("");
+
+      el.querySelectorAll(".skill-pending-preview").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var row = btn.closest(".pending-row");
+          var id = row && row.getAttribute("data-id");
+          var box = row && row.querySelector(".pending-preview");
+          var body = row && row.querySelector(".pending-preview-body");
+          if (!id || !box || !body) return;
+          if (!box.hidden) {
+            box.hidden = true;
+            btn.textContent = "预览";
+            return;
+          }
+          box.hidden = false;
+          btn.textContent = "收起";
+          if (body.dataset.loaded === "1") return;
+          api("GET", "/api/admin/skills/pending/" + encodeURIComponent(id))
+            .then(function (j) {
+              body.textContent = j.content || "(空)";
+              body.dataset.loaded = "1";
+            })
+            .catch(function (exc) {
+              body.textContent = detailText(exc, "加载失败");
+            });
+        });
+      });
+
+      el.querySelectorAll(".skill-pending-approve").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var row = btn.closest(".pending-row");
+          var id = row && row.getAttribute("data-id");
+          var dirname = row && row.getAttribute("data-dirname");
+          if (!id) return;
+          uiConfirm(
+            "通过投稿「" + (dirname || id) + "」并发布到技能库？若同名技能已存在将提示冲突。",
+            { title: "通过投稿", okText: "通过并发布" }
+          ).then(function (ok) {
+            if (!ok) return;
+            btn.disabled = true;
+            api("POST", "/api/admin/skills/pending/" + encodeURIComponent(id) + "/approve", {
+              overwrite: false,
+              name: "",
+            })
+              .then(function (j) {
+                var s = j.skill || {};
+                var msg = $("skills-pending-msg");
+                if (msg) {
+                  msg.textContent = "✓ 已发布 " + (s.name || s.dirname || id);
+                  msg.className = "status-line";
+                }
+                loadPendingSkills();
+                loadSkills();
+              })
+              .catch(function (exc) {
+                var detail = detailText(exc, "通过失败");
+                if (exc && (exc.status === 409 || (typeof detail === "string" && detail.indexOf("已存在") >= 0))) {
+                  uiConfirm(detail + "\n\n是否覆盖已有技能？", {
+                    title: "技能已存在",
+                    okText: "覆盖发布",
+                    danger: true,
+                  }).then(function (overwriteOk) {
+                    if (!overwriteOk) {
+                      btn.disabled = false;
+                      return;
+                    }
+                    api("POST", "/api/admin/skills/pending/" + encodeURIComponent(id) + "/approve", {
+                      overwrite: true,
+                      name: "",
+                    })
+                      .then(function () {
+                        loadPendingSkills();
+                        loadSkills();
+                      })
+                      .catch(function (exc2) {
+                        uiAlert(detailText(exc2, "覆盖发布失败"), { title: "失败", tone: "err" });
+                        btn.disabled = false;
+                      });
+                  });
+                  return;
+                }
+                uiAlert(detail, { title: "通过失败", tone: "err" });
+                btn.disabled = false;
+              });
+          });
+        });
+      });
+
+      el.querySelectorAll(".skill-pending-reject").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var row = btn.closest(".pending-row");
+          var id = row && row.getAttribute("data-id");
+          var dirname = row && row.getAttribute("data-dirname");
+          if (!id) return;
+          uiConfirm("拒绝并删除投稿「" + (dirname || id) + "」？此操作不可恢复。", {
+            title: "拒绝投稿",
+            okText: "拒绝",
+            danger: true,
+          }).then(function (ok) {
+            if (!ok) return;
+            btn.disabled = true;
+            api("POST", "/api/admin/skills/pending/" + encodeURIComponent(id) + "/reject", {
+              reason: "",
+              delete: true,
+            })
+              .then(function () {
+                var msg = $("skills-pending-msg");
+                if (msg) {
+                  msg.textContent = "已拒绝 " + (dirname || id);
+                  msg.className = "status-line muted";
+                }
+                loadPendingSkills();
+              })
+              .catch(function (exc) {
+                uiAlert(detailText(exc, "拒绝失败"), { title: "拒绝失败", tone: "err" });
+                btn.disabled = false;
+              });
+          });
+        });
+      });
+    }).catch(function (exc) {
+      el.innerHTML = "";
+      if (empty) {
+        empty.hidden = false;
+        empty.textContent = detailText(exc, "加载待审列表失败");
+      }
+    });
+  }
+
   function loadSkills() {
     api("GET", "/api/admin/skills").then(function (data) {
       var list = data.skills || [];
@@ -808,11 +1003,17 @@
         hint.innerHTML = "持久化目录：<code>" + esc(data.skills_dir) + "</code>（宿主机对应 <code>intranet/config/skills/</code>）";
       }
       $("skills-count").textContent = list.length ? ("共 " + list.length + " 个") : "";
+      var pendingBadge = $("skills-pending-count");
+      if (pendingBadge && typeof data.pending_count === "number" && data.pending_count > 0) {
+        pendingBadge.hidden = false;
+        pendingBadge.textContent = String(data.pending_count);
+      }
       var el = $("skills-list");
       var empty = $("skills-empty");
       if (!list.length) {
         el.innerHTML = "";
         empty.hidden = false;
+        empty.innerHTML = '还没有已上架技能。';
         return;
       }
       empty.hidden = true;
@@ -909,7 +1110,13 @@
   }
 
   if ($("skills-refresh")) {
-    $("skills-refresh").addEventListener("click", loadSkills);
+    $("skills-refresh").addEventListener("click", function () {
+      loadSkills();
+      loadPendingSkills();
+    });
+  }
+  if ($("skills-pending-refresh")) {
+    $("skills-pending-refresh").addEventListener("click", loadPendingSkills);
   }
 
   if ($("skills-translate-missing")) {
@@ -1055,7 +1262,11 @@
     }).then(function (r) {
       if (r.status === 401 && url.indexOf("/login") === -1) { handleAuth(); throw { detail: "未登录" }; }
       return r.json().then(function (j) {
-        if (!r.ok) throw j; return j;
+        if (!r.ok) {
+          if (j && typeof j === "object") j.status = r.status;
+          throw j;
+        }
+        return j;
       });
     });
   }

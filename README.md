@@ -15,7 +15,7 @@
 - 🪞 **全站保真镜像**：首页、文档、更新日志、隐私/条款全部离线可访问，样式/图片/字体原样保留。
 - 🤖 **AI 问答助手**：每个页面右下角浮动入口，基于本站文档回答问题并给出来源（默认 BM25 关键词检索，可切换向量检索）。
 - 💻 **本地大模型接入**：通过 OpenAI 兼容接口对接 Ollama / vLLM / Xinference / LM Studio 等本地部署的模型。
-- 🪟 **仅 Windows 安装包**：内网镜像只打包最新版 Windows x64 + ARM64 安装包（Mac/Linux 按钮置灰提示）。
+- 🪟 **仅 Windows 安装包**：内网镜像只打包最新版 Windows x64 安装包（主按钮改为 Windows；Mac/Linux 入口隐藏，Windows ARM64 置灰）。
 - 🔒 **安全摆渡**：`.zdoc` 包带 `manifest.json` + 全文件 SHA-256，内网导入时逐文件校验，损坏/被篡改会中止。
 - 🔁 **可重复升级**：`import.sh` 自动比对版本号、原子替换、备份旧版、重建 AI 索引；同版本自动跳过。
 
@@ -88,7 +88,7 @@ ls dist/
 3. **patch** — 删 Google 分析、改写下载链接为本地、中和 Next.js 客户端路由、写登录占位页
 4. **inject** — 注入 AI 浮窗
 5. **relativise** — 把站内绝对路径（`/_next/...`、`/_zc/...`、`/images/...`、`/cn/...`）转成相对路径，这样**双击 HTML 用 `file://` 打开也能正常显示**（不止 nginx 部署）
-6. **releases** — 下载最新 Windows x64 + ARM64 安装包及 `latest.yml`
+6. **releases** — 下载最新 Windows x64 安装包及 `latest.yml`
 7. **manifest** — 生成 `manifest.json` + `SHA256SUMS`
 8. **package** — 打成单个 `.zdoc`（tar.gz）
 
@@ -184,7 +184,7 @@ ZCode 发版后，在**外网机**重新 `make collect` 得到新版 `.zdoc` →
 - [ ] `http://<IP>:8080` 能打开首页，hero 文案「简单、迅捷、氛围十足」正常
 - [ ] 左侧/顶部导航点击各文档页面，**所有链接可到达**、图片正常显示
 - [ ] 「更新日志」页能看到全部 20 个版本
-- [ ] 下载区 Windows 按钮点击可下载本地 `.exe`；Mac/Linux 按钮已置灰
+- [ ] 下载区主按钮为 Windows x64，可下载本地 `.exe`；Mac/Linux 入口已隐藏；Windows ARM64 已置灰
 - [ ] 右下角 **AI 问答** 按钮可展开面板
 - [ ] 提问「如何安装 ZCode」「什么是 Agent」能得到带来源的回答
 - [ ] `http://<IP>:8080/admin` 能打开管理后台，admin/admin 登录成功

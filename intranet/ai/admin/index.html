@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ZCode 镜像 · 管理后台</title>
   <link rel="icon" href="/favicon.ico" />
-  <link rel="stylesheet" href="/admin/admin.css?v=13" />
+  <link rel="stylesheet" href="/admin/admin.css?v=16" />
 </head>
 <body>
   <!-- Login -->
@@ -46,7 +46,7 @@
         <button type="button" class="nav-item" data-tab="model" data-title="模型" data-sub="添加多个 OpenAI 兼容接口，并设置启用项">模型</button>
         <button type="button" class="nav-item" data-tab="logs" data-title="访问记录" data-sub="局域网访客 IP、提问内容与 Token 明细">访问记录</button>
         <button type="button" class="nav-item" data-tab="import" data-title="内容导入" data-sub="上传 .zdoc 包完成校验、升级与重建索引">内容导入</button>
-        <button type="button" class="nav-item" data-tab="skills" data-title="技能库" data-sub="维护局域网可下载的 Skill 源">技能库</button>
+        <button type="button" class="nav-item" data-tab="skills" data-title="技能审核" data-sub="审核局域网用户投稿，通过后上架">技能审核</button>
         <button type="button" class="nav-item" data-tab="account" data-title="账户" data-sub="修改管理员用户名与密码">账户</button>
       </nav>
       <div class="sidebar-foot">
@@ -211,7 +211,7 @@
         <section id="tab-skills" class="tab-pane">
           <div class="surface-head page-actions">
             <div>
-              <p class="muted tight">管理员上传后，局域网用户可在 <a href="/skills/" target="_blank" rel="noopener">/skills</a> 浏览下载。</p>
+              <p class="muted tight">局域网用户在 <a href="/skills/#submit" target="_blank" rel="noopener">/skills</a> 投稿后，在此审核；通过后才会上架供下载。</p>
               <p id="skills-dir-hint" class="hint" hidden></p>
             </div>
             <div class="actions">
@@ -221,37 +221,46 @@
             </div>
           </div>
 
-          <div id="skills-dropzone" class="dropzone skills-dropzone">
-            <input id="skills-file" type="file" accept=".zip,application/zip" hidden />
-            <div class="dz-badge">.zip</div>
-            <p class="dz-title">点击或拖拽技能 zip 到这里上传</p>
-            <p class="muted">自动解析 <code>SKILL.md</code> / <code>_meta.json</code>，并用内置 AI 把简介译成中文（可为 <code>技能名/SKILL.md</code>）</p>
-          </div>
-          <p id="skills-upload-msg" class="status-line muted"></p>
-
-          <section class="surface">
-            <h3>粘贴创建（可选）</h3>
-            <p class="muted tight">一般直接上传 zip。粘贴时也只需放整份 <code>SKILL.md</code>，目录名 / 简介 / 作者会从 frontmatter 自动解析。</p>
-            <form id="skills-form" class="form-stack skills-form">
-              <label class="field">SKILL.md
-                <textarea id="sk-body" rows="14" placeholder="---&#10;name: my-skill&#10;description: 一句话说明何时使用&#10;author: 可选&#10;---&#10;&#10;# 标题&#10;&#10;使用步骤…" required></textarea>
-              </label>
-              <div class="actions">
-                <button type="submit" class="btn btn-primary">保存技能</button>
-                <span id="sk-msg" class="status-line muted"></span>
-              </div>
-            </form>
+          <section class="surface" id="skills-pending-section">
+            <div class="surface-head">
+              <h3>待审核投稿 <span id="skills-pending-count" class="badge soft" hidden></span></h3>
+              <button type="button" class="btn btn-ghost btn-sm" id="skills-pending-refresh">刷新</button>
+            </div>
+            <p id="skills-pending-msg" class="status-line muted"></p>
+            <div id="skills-pending-list" class="skill-list"></div>
+            <p id="skills-pending-empty" class="empty muted" hidden>暂无待审投稿。告诉同事打开 <a href="/skills/#submit" target="_blank" rel="noopener">/skills</a> 上传即可。</p>
           </section>
 
           <section class="surface">
             <div class="surface-head">
-              <h3>已发布技能</h3>
+              <h3>已上架技能</h3>
               <span id="skills-count" class="muted"></span>
             </div>
             <p id="skills-batch-msg" class="status-line muted"></p>
             <div id="skills-list" class="skill-list"></div>
-            <p id="skills-empty" class="empty muted" hidden>还没有技能。上传 zip、粘贴创建，或把目录拷到宿主机 <code>intranet/config/skills/</code>。</p>
+            <p id="skills-empty" class="empty muted" hidden>还没有已上架技能。审核通过用户投稿后会出现在这里。</p>
           </section>
+
+          <details class="surface skills-admin-advanced">
+            <summary>管理员补发（可选）</summary>
+            <p class="muted tight">仅在需要跳过审核、直接上架时使用。日常请让用户走公开页投稿。</p>
+            <div id="skills-dropzone" class="dropzone skills-dropzone">
+              <input id="skills-file" type="file" accept=".zip,application/zip" hidden />
+              <div class="dz-badge">.zip</div>
+              <p class="dz-title">点击或拖拽技能 zip（直接上架）</p>
+              <p class="muted">自动解析 <code>SKILL.md</code> / <code>_meta.json</code>，并用内置 AI 把简介译成中文</p>
+            </div>
+            <p id="skills-upload-msg" class="status-line muted"></p>
+            <form id="skills-form" class="form-stack skills-form">
+              <label class="field">粘贴 SKILL.md（可选）
+                <textarea id="sk-body" rows="10" placeholder="---&#10;name: my-skill&#10;description: 一句话说明何时使用&#10;author: 可选&#10;---&#10;&#10;# 标题&#10;&#10;使用步骤…"></textarea>
+              </label>
+              <div class="actions">
+                <button type="submit" class="btn btn-ghost">直接保存上架</button>
+                <span id="sk-msg" class="status-line muted"></span>
+              </div>
+            </form>
+          </details>
         </section>
 
         <!-- Account -->
@@ -284,6 +293,6 @@
     </div>
   </div>
 
-  <script src="/admin/admin.js?v=13"></script>
+  <script src="/admin/admin.js?v=17"></script>
 </body>
 </html>
