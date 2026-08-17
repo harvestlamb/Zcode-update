@@ -424,6 +424,14 @@ input:focus, textarea:focus {
   height: 100%; width: 0%; background: #fff;
   transition: width .15s;
 }
+.bar-fill.busy {
+  width: 35% !important;
+  animation: bar-slide 1.2s ease-in-out infinite;
+}
+@keyframes bar-slide {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}
 .result {
   margin-top: 18px; padding: 16px 18px;
   border-radius: var(--radius);

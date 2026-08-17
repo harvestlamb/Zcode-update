@@ -21,6 +21,7 @@ import os
 import re
 import shutil
 import tarfile
+import time
 from dataclasses import dataclass, field
 
 log = logging.getLogger("zcode-ai.importer")
@@ -88,6 +89,25 @@ def _verify_sums(staging: str) -> tuple[bool, int, list]:
     return (not failures), checked, failures
 
 
+def _rm_path(path: str, attempts: int = 8) -> None:
+    """Remove a file/dir, retrying — Windows bind mounts often return ENOTEMPTY."""
+    last: OSError | None = None
+    for i in range(attempts):
+        try:
+            if not os.path.lexists(path):
+                return
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+            return
+        except OSError as exc:
+            last = exc
+            time.sleep(0.25 * (i + 1))
+    if last is not None:
+        raise last
+
+
 def _wipe_contents(dir_path: str) -> None:
     """Remove everything *inside* dir_path but keep the dir itself.
 
@@ -95,26 +115,83 @@ def _wipe_contents(dir_path: str) -> None:
     mount point itself raises EBUSY, so we delete entries one level down.
     """
     os.makedirs(dir_path, exist_ok=True)
-    for name in os.listdir(dir_path):
-        p = os.path.join(dir_path, name)
-        if os.path.isdir(p) and not os.path.islink(p):
-            shutil.rmtree(p)
-        else:
-            os.remove(p)
+    for name in list(os.listdir(dir_path)):
+        _rm_path(os.path.join(dir_path, name))
 
 
-def _copy_contents(src_dir: str, dst_dir: str) -> None:
-    """Copy every entry inside src_dir into dst_dir (not the dir itself)."""
+def _sync_tree(src_dir: str, dst_dir: str) -> None:
+    """Overlay src_dir onto dst_dir and drop files that are not in src.
+
+    Prefer this over wipe+copytree on Docker Desktop / Windows: nginx may
+    keep /data/site open, so rmtree raises [Errno 39] Directory not empty.
+    """
     os.makedirs(dst_dir, exist_ok=True)
     if not os.path.isdir(src_dir):
         return
+    wanted = set()
     for name in os.listdir(src_dir):
+        wanted.add(name)
         src = os.path.join(src_dir, name)
         dst = os.path.join(dst_dir, name)
-        if os.path.isdir(src):
-            shutil.copytree(src, dst, symlinks=True)
+        if os.path.isdir(src) and not os.path.islink(src):
+            if os.path.isfile(dst) or os.path.islink(dst):
+                os.remove(dst)
+            _sync_tree(src, dst)
         else:
+            if os.path.isdir(dst) and not os.path.islink(dst):
+                _rm_path(dst)
             shutil.copy2(src, dst)
+    for name in list(os.listdir(dst_dir)):
+        if name in wanted:
+            continue
+        try:
+            _rm_path(os.path.join(dst_dir, name))
+        except OSError as exc:
+            log.warning("Could not remove leftover %s: %s", name, exc)
+
+
+def _replace_entry(src: str, dst: str) -> None:
+    """Put src at dst without rmtree'ing dst first (nginx may have it open).
+
+    Copy onto a sibling ``.incoming`` name, rename dst → ``.old``, then
+    incoming → dst. Rename is instant on the same bind mount; deleting
+    ``.old`` is best-effort.
+    """
+    incoming = dst + ".incoming"
+    old = dst + ".old"
+    try:
+        _rm_path(incoming)
+    except OSError:
+        pass
+    if os.path.isdir(src) and not os.path.islink(src):
+        shutil.copytree(src, incoming, symlinks=True)
+    else:
+        parent = os.path.dirname(dst)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        shutil.copy2(src, incoming)
+    if os.path.lexists(dst):
+        try:
+            _rm_path(old)
+        except OSError:
+            pass
+        try:
+            os.rename(dst, old)
+        except OSError:
+            if os.path.isdir(incoming) and not os.path.islink(incoming):
+                _sync_tree(incoming, dst)
+            else:
+                shutil.copy2(incoming, dst)
+            try:
+                _rm_path(incoming)
+            except OSError:
+                pass
+            return
+    os.rename(incoming, dst)
+    try:
+        _rm_path(old)
+    except OSError as exc:
+        log.warning("Could not remove leftover %s: %s", old, exc)
 
 
 def backup_available() -> bool:
@@ -151,8 +228,8 @@ def _restore_from_backup() -> tuple[bool, str]:
     if not backup_available():
         return False, "没有可用备份，无法回滚"
     try:
-        _wipe_contents(DATA_DIR)
-        _copy_contents(BACKUP_DIR, DATA_DIR)
+        # Do not rmtree /data first — nginx holds files under /data/site.
+        _sync_tree(BACKUP_DIR, DATA_DIR)
     except OSError as exc:
         return False, f"回滚失败: {exc}"
     problems = _validate_data_dir()
@@ -213,6 +290,7 @@ def import_package(pkg_path: str) -> ImportResult:
         return res
 
     # 1. integrity
+    log.info("Import: verifying SHA-256 for package files")
     ok_hashes, n_checked, failures = _verify_sums(STAGING_DIR)
     res.files_checked = n_checked
     if not ok_hashes:
@@ -248,14 +326,20 @@ def import_package(pkg_path: str) -> ImportResult:
     # mount points themselves (EBUSY). Instead we replace their *contents*.
     swapped = False
     try:
-        _wipe_contents(BACKUP_DIR)            # clean old backup
-        _copy_contents(DATA_DIR, BACKUP_DIR)  # snapshot current data as backup
+        log.info("Import: snapshot current data → backup")
+        _sync_tree(DATA_DIR, BACKUP_DIR)      # snapshot current data as backup
         res.backup_available = backup_available()
-        _wipe_contents(DATA_DIR)              # clear current data
-        for item in _KEEP:                    # move known entries in
+        keep = set(_KEEP)
+        log.info("Import: write new content into /data")
+        for item in _KEEP:
             src = os.path.join(STAGING_DIR, item)
-            if os.path.exists(src):
-                shutil.move(src, os.path.join(DATA_DIR, item))
+            dst = os.path.join(DATA_DIR, item)
+            if not os.path.exists(src):
+                continue
+            _replace_entry(src, dst)
+        for name in list(os.listdir(DATA_DIR)):
+            if name not in keep and not name.endswith(".old") and not name.endswith(".incoming"):
+                _rm_path(os.path.join(DATA_DIR, name))
         swapped = True
         problems = _validate_data_dir()
         if problems:
@@ -289,4 +373,11 @@ def import_package(pkg_path: str) -> ImportResult:
     res.ok = True
     res.action = "upgraded" if cur_ver not in ("none", "unknown") else "imported"
     res.message = f"升级完成: {cur_ver} -> {new_ver}"
+    try:
+        import overlay_apply
+        applied = overlay_apply.apply(DATA_DIR)
+        if applied.get("copied"):
+            res.message += "；已重新套用文档助手"
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Docs-assistant overlay not applied after import: %s", exc)
     return res

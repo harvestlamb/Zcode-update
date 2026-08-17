@@ -46,10 +46,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def _no_cache_admin_ui(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/admin"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 retriever = Retriever(os.environ.get("CONTENT_DIR", CONTENT_DIR))
 llm = LLMClient()
 _index_lock = threading.Lock()
 skills_store.ensure_dir()
+try:
+    import overlay_apply
+    overlay_apply.apply()
+except Exception as exc:  # noqa: BLE001
+    log.warning("Docs-assistant overlay not applied on startup: %s", exc)
 
 
 SYSTEM_PROMPT = (

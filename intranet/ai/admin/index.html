@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ZCode 镜像 · 管理后台</title>
   <link rel="icon" href="/favicon.ico" />
-  <link rel="stylesheet" href="/admin/admin.css?v=16" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <link rel="stylesheet" href="/admin/admin.css?v=21" />
 </head>
 <body>
   <!-- Login -->
@@ -195,6 +196,11 @@
               </div>
               <button type="button" class="btn btn-ghost" id="imp-rollback" disabled>回滚到上一版</button>
             </div>
+            <div id="rb-progress" class="progress" hidden>
+              <div class="bar"><div id="rb-bar-fill" class="bar-fill"></div></div>
+              <span id="rb-pct" class="muted">准备回滚…</span>
+            </div>
+            <div id="rb-result" class="result" hidden></div>
           </section>
 
           <section class="surface">
@@ -293,6 +299,6 @@
     </div>
   </div>
 
-  <script src="/admin/admin.js?v=17"></script>
+  <script src="/admin/admin.js?v=21"></script>
 </body>
 </html>

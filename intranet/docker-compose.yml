@@ -33,11 +33,14 @@ services:
       # Admin UI persists settings here (independent of /data, survives imports).
       - CONFIG_DIR=/config
       - BACKUP_DIR=/backup
+      - OVERLAY_DIR=/overlay
       - TZ=Asia/Shanghai
     volumes:
       - ./data:/data         # rw now: the admin import UI swaps content here
       - ./config:/config     # persisted LLM + admin settings (survives upgrades)
       - ./data.backup:/backup  # previous data version, for rollback
+      # Custom docs assistant; re-applied after every .zdoc import.
+      - ../site-overlay:/overlay:ro
     # If the LLM runs on the Docker host (e.g. Ollama), add:
     #   extra_hosts: ["host.docker.internal:host-gateway"]
     extra_hosts:

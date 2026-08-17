@@ -677,9 +677,40 @@
         if (!ok) return;
         var btn = $("imp-rollback");
         btn.disabled = true;
+        var prog = $("rb-progress") || $("imp-progress");
+        var fill = $("rb-bar-fill") || $("imp-bar-fill");
+        var pct = $("rb-pct") || $("imp-pct");
+        var resultBox = $("rb-result") || $("imp-result");
+        if (resultBox) resultBox.hidden = true;
+        if (prog) {
+          prog.hidden = false;
+          if (prog.scrollIntoView) prog.scrollIntoView({ block: "nearest" });
+        }
+        if (fill) {
+          fill.classList.add("busy");
+          fill.style.width = "35%";
+        }
+        var steps = [
+          "正在读取备份…",
+          "正在覆盖当前站点（文件较多时需一两分钟）…",
+          "正在套用文档助手和下载补丁…",
+          "正在重建检索索引…"
+        ];
+        var stepIdx = 0;
+        if (pct) pct.textContent = steps[0];
+        var tick = setInterval(function () {
+          stepIdx = (stepIdx + 1) % steps.length;
+          if (pct) pct.textContent = steps[stepIdx];
+        }, 2500);
         api("POST", "/api/admin/rollback")
           .then(function (body) {
-            var r = $("imp-result");
+            clearInterval(tick);
+            if (fill) {
+              fill.classList.remove("busy");
+              fill.style.width = "100%";
+            }
+            if (pct) pct.textContent = "全部完成";
+            var r = $("rb-result") || $("imp-result");
             if (r) {
               r.hidden = false;
               r.className = "result " + (body.ok ? "ok" : "err");
@@ -692,6 +723,9 @@
             loadUpgradeHistory();
           })
           .catch(function (exc) {
+            clearInterval(tick);
+            if (fill) fill.classList.remove("busy");
+            if (pct) pct.textContent = "失败";
             uiAlert(detailText(exc, "回滚失败"), { title: "回滚失败", tone: "err" });
           })
           .finally(function () { loadBackupState(); });
@@ -759,7 +793,7 @@
     $("imp-result").hidden = true;
     var prog = $("imp-progress"), fill = $("imp-bar-fill"), pct = $("imp-pct");
     var uploadDone = false;
-    prog.hidden = false; fill.style.width = "0%"; pct.textContent = "上传中 0%…";
+    prog.hidden = false; fill.style.width = "0%"; fill.classList.remove("busy"); pct.textContent = "上传中 0%…";
     var xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/admin/import");
     xhr.upload.onprogress = function (e) {
@@ -777,9 +811,23 @@
     xhr.upload.onload = function () {
       uploadDone = true;
       fill.style.width = "100%";
-      pct.textContent = "上传完成，正在校验并重建索引…";
+      pct.textContent = "上传完成，正在校验包完整性…";
     };
+    var steps = [
+      "上传完成，正在校验包完整性…",
+      "正在备份当前版本…",
+      "正在写入新内容（安装包较大时需一两分钟）…",
+      "正在套用文档助手和下载补丁…",
+      "正在重建检索索引…"
+    ];
+    var stepIdx = 0;
+    var tick = setInterval(function () {
+      if (!uploadDone) return;
+      stepIdx = (stepIdx + 1) % steps.length;
+      pct.textContent = steps[stepIdx];
+    }, 2500);
     xhr.onload = function () {
+      clearInterval(tick);
       var body; try { body = JSON.parse(xhr.responseText); } catch (err) { body = {}; }
       fill.style.width = "100%";
       pct.textContent = "全部完成";
@@ -806,11 +854,20 @@
       loadUpgradeHistory();
     };
     xhr.onerror = function () {
+      clearInterval(tick);
       $("imp-result").hidden = false;
       $("imp-result").className = "result err";
       $("imp-result").innerHTML = "<h4>网络错误</h4><p>上传失败，请重试。</p>";
       pct.textContent = "失败";
     };
+    xhr.ontimeout = function () {
+      clearInterval(tick);
+      $("imp-result").hidden = false;
+      $("imp-result").className = "result err";
+      $("imp-result").innerHTML = "<h4>处理超时</h4><p>包已上传，服务器仍在写入。请稍后刷新本页查看升级记录，不要重复导入。</p>";
+      pct.textContent = "超时";
+    };
+    xhr.timeout = 15 * 60 * 1000;
     var fd = new FormData(); fd.append("file", file);
     xhr.send(fd);
   }
